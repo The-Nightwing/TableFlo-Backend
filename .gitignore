@@ -1,0 +1,65 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+.ebextensions/
+.wellknown/
+.platform/
+Archive.zip
+
+# macOS system files
+.DS_Store
+
+# Environment variables and secrets
+*.env
+*.env.*
+*.secret
+*.key
+*.pem
+*.crt
+*.p12
+
+# Firebase credentials
+file-processing-app-f7c073da43a3.json
+*.firebase.json
+config.py
+firebase_config.py
+
+# VS Code settings
+.vscode/
+
+# Python egg and build artifacts
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Test and coverage outputs
+htmlcov/
+.coverage
+.tox/
+.nox/
+.cache/
+pytest_cache/
+coverage.xml
+
+# Node modules (if any frontend)
+node_modules/
+
+# System files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Backup files
+*.bak
