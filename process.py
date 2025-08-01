@@ -887,36 +887,31 @@ def update_process(process_id):
 
         # Update operations if provided
         if 'operations' in data:
-            # Clear existing operations
-            ProcessOperation.query.filter_by(process_id=process.id).delete()
-            
-            # Add new operations
-            for i, operation in enumerate(data['operations']):
-                if operation['type'] == 'edit_file':
-                    # Create batch operation for edit_file type
-                    batch_operation = DataFrameBatchOperation(
-                        process_id=process.id,
-                        payload=operation['params'],
-                        dataframe_ids=[],
-                        operation_ids=[],
-                        total_dataframes=len(operation['params'].get('tables', []))
-                    )
-                    db.session.add(batch_operation)
-                    db.session.commit()
-                    
-                    process_operation = ProcessOperation(
-                        sequence=float(i),
-                        operation_name=operation['type'],
-                        parameters=operation['params'],
-                        dataframe_operation_id=batch_operation.id
-                    )
+            # Only update the fields of the edited operation, preserve sequence/order
+            incoming_ops = data['operations']
+            # Get all existing operations for this process
+            existing_ops = {op.id: op for op in ProcessOperation.query.filter_by(process_id=process.id).all()}
+            for op_data in incoming_ops:
+                op_id = op_data.get('id')
+                if not op_id or op_id not in existing_ops:
+                    continue  # skip new ops or invalid ids
+                op = existing_ops[op_id]
+                # Only update fields except sequence
+                if op_data['type'] == 'edit_file':
+                    # If edit_file, update batch operation payload if needed
+                    batch_op_id = op.dataframe_operation_id
+                    batch_op = DataFrameBatchOperation.query.get(batch_op_id) if batch_op_id else None
+                    if batch_op:
+                        batch_op.payload = op_data['params']
+                        db.session.add(batch_op)
+                    op.parameters = op_data['params']
                 else:
-                    process_operation = ProcessOperation(
-                        sequence=float(i),
-                        operation_name=operation['type'],
-                        parameters=operation['params']
-                    )
-                process.operations.append(process_operation)
+                    op.parameters = op_data['params']
+                if 'title' in op_data:
+                    op.title = op_data['title']
+                if 'description' in op_data:
+                    op.description = op_data['description']
+                db.session.add(op)
 
         # Add operation to database
         db.session.add(process)
