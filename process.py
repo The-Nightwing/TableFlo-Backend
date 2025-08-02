@@ -8,7 +8,7 @@ from io import BytesIO
 import os
 import traceback
 from formatting import format_excel_file
-from edit_file import edit_file
+from edit_file import edit_file, process_columns_and_types
 from sort_filter import process_sort_filter_data
 from group_pivot import process_pivot_table
 from add_column import process_add_column

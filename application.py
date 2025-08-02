@@ -108,4 +108,4 @@ def serve_auth_file():
     return Response(auth_text, mimetype='text/plain')
 
 if __name__ == '__main__':
-    application.run(debug=True, port = 5001)
+    application.run(debug=True, port = 8080)
