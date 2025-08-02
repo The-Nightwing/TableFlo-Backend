@@ -29,6 +29,8 @@ file-processing-app-f7c073da43a3.json
 *.firebase.json
 config.py
 firebase_config.py
+deployment-package.zip
+.elasticbeanstalk/
 
 # VS Code settings
 .vscode/
