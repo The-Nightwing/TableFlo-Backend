@@ -728,6 +728,10 @@ def get_process(process_id):
         email = request.headers.get("X-User-Email")
         if not email:
             return jsonify({"error": "Email is required"}), 400
+        
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "User {email} not found."}), 404
 
         process = UserProcess.query.filter_by(id=process_id, user_id=user.id).first()
         if not process:
