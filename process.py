@@ -2142,6 +2142,7 @@ def manage_process_operations(process_id):
                 return jsonify({"error": f"Missing required field: {field}"}), 400
 
         operation_type = data.get('operationType')
+        title = data.get('title')
 
         if operation_type == 'edit_file':
             batch_operation = DataFrameBatchOperation.query.get(data['dataframeOperationId'])
@@ -2150,6 +2151,7 @@ def manage_process_operations(process_id):
 
             process_operation = ProcessOperation(
                 process_id=process_id,
+                title = title,
                 sequence=float(data['sequence']),
                 operation_name='edit_file',
                 parameters={**batch_operation.payload, 'batchOperationId': batch_operation.id},

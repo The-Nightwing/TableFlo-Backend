@@ -291,7 +291,10 @@ class DataFrame(db.Model):
         self.row_count = row_count
         self.column_count = column_count
         self.storage_path = storage_path
-        self.data_metadata = data_metadata or {}
+        if isinstance(data_metadata, str):
+            self.data_metadata = json.loads(data_metadata)
+        else:
+            self.data_metadata = data_metadata or {}
         self.is_originally_uploaded = is_originally_uploaded
 
     def to_dict(self):
