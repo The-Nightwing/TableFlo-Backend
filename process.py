@@ -2152,6 +2152,7 @@ def manage_process_operations(process_id):
             process_operation = ProcessOperation(
                 process_id=process_id,
                 title = deleted_operation_info.title or "",
+                description = deleted_operation_info.description or "",
                 sequence=float(data['sequence']),
                 operation_name='edit_file',
                 parameters={**batch_operation.payload, 'batchOperationId': batch_operation.id},
@@ -2165,6 +2166,7 @@ def manage_process_operations(process_id):
             process_operation = ProcessOperation(
                 process_id=process_id,
                 title = deleted_operation_info.title or "",
+                description = deleted_operation_info.description or "",
                 sequence=float(data['sequence']),
                 operation_name=df_operation.operation_type,
                 parameters=df_operation.payload,
