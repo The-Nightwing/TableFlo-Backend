@@ -951,6 +951,9 @@ def update_process(process_id):
             if not placeholder.exists():
                 placeholder.upload_from_string('')
 
+        # Fetch updated operations in correct sequence to maintain order
+        sorted_operations = ProcessOperation.query.filter_by(process_id=process.id).order_by(ProcessOperation.sequence).all()
+
         return jsonify({
             "success": True,
             "message": "Process updated successfully",
@@ -962,7 +965,7 @@ def update_process(process_id):
                 "updatedAt": process.updated_at.isoformat(),
                 #"storagePath": current_base_path,
                 "fileKeys": {key.key_name: key.required_structure for key in process.file_keys},
-                "operations": [op.to_dict() for op in process.operations]
+                "operations": [op.to_dict() for op in sorted_operations]
             }
         })
 
@@ -1141,10 +1144,14 @@ def add_operation_to_process(process_id):
         db.session.add(process)
 
         # Rest of the validation and operation creation...
-        required_fields = ['dataframeOperationId', 'sequence']
+        required_fields = ['dataframeOperationId']
         for field in required_fields:
             if field not in data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
+
+        # Determine the next sequence number
+        last_operation = ProcessOperation.query.filter_by(process_id=process_id).order_by(ProcessOperation.sequence.desc()).first()
+        next_sequence = (last_operation.sequence + 1.0) if last_operation else 1.0
 
         operation_type = data.get('operationType')
         
@@ -1164,7 +1171,7 @@ def add_operation_to_process(process_id):
             # Create ProcessOperation without dataframe_operation_id
             process_operation = ProcessOperation(
                 process_id=process_id,
-                sequence=float(data['sequence']),
+                sequence=next_sequence,
                 operation_name='edit_file',
                 title=title or "Define Inputs",  # Use provided title or default
                 description=batch_operation.message,
@@ -1217,7 +1224,7 @@ def add_operation_to_process(process_id):
             # Create ProcessOperation
             process_operation = ProcessOperation(
                 process_id=process_id,
-                sequence=float(data['sequence']),
+                sequence=next_sequence,
                 operation_name=df_operation.operation_type,
                 title=operation_title,
                 description=df_operation.message,
