@@ -2151,7 +2151,7 @@ def manage_process_operations(process_id):
 
             process_operation = ProcessOperation(
                 process_id=process_id,
-                title = deleted_operation_info.title or "",
+                title = deleted_operation_info.title or "Define Inputs",
                 description = deleted_operation_info.description or "",
                 sequence=float(data['sequence']),
                 operation_name='edit_file',
@@ -2162,10 +2162,39 @@ def manage_process_operations(process_id):
             df_operation = DataFrameOperation.query.get(data['dataframeOperationId'])
             if not df_operation or df_operation.process_id != process_id:
                 return jsonify({"error": "DataFrameOperation not found or does not belong to this process"}), 404
+            
+            operation_title = deleted_operation_info.title or None  # Default to provided title
+            if not operation_title:
+                if df_operation.operation_type == "add_column":
+                    subtype = df_operation.operation_subtype.lower()
+                    if "calcul" in subtype:
+                        operation_title = "Add Column – Calculate"
+                    elif "concat" in subtype:
+                        operation_title = "Add Column – Concatenate"
+                    elif "conditional" in subtype:
+                        operation_title = "Add Column – Conditional"
+                    elif "pattern" in subtype:
+                        operation_title = "Add Column – Pattern"
+                elif df_operation.operation_type == "merge_files":
+                    operation_title = "Merge"
+                elif df_operation.operation_type == "group_pivot":
+                    operation_title = "Pivot"
+                elif df_operation.operation_type == "sort_filter":
+                    payload_str = str(df_operation.payload).lower()
+                    if "sortconfig" in payload_str:
+                        operation_title = "Sort"
+                    elif "filterconfig" in payload_str:
+                        operation_title = "Filter"
+                elif df_operation.operation_type == "replace_rename_reorder":
+                    operation_title = "Replace Rename Reorder"
+                elif df_operation.operation_type == "reconcile_files":
+                    operation_title = "Reconcile"
+                elif df_operation.operation_type == "apply_formatting":
+                    operation_title = "Formatting"
 
             process_operation = ProcessOperation(
                 process_id=process_id,
-                title = deleted_operation_info.title or "",
+                title = operation_title,
                 description = deleted_operation_info.description or "",
                 sequence=float(data['sequence']),
                 operation_name=df_operation.operation_type,
