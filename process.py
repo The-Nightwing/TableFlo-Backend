@@ -874,18 +874,27 @@ def update_process(process_id):
         if 'file_mappings' in data:
             file_mappings = data['file_mappings']
             
-            # Clear existing file keys
-            ProcessFileKey.query.filter_by(process_id=process.id).delete()
-            
-            # Add new file keys
             for key_name, filename in file_mappings.items():
                 try:
                     metadata = get_file_metadata(email, filename)
-                    process_file_key = ProcessFileKey(
-                        key_name=key_name,
-                        required_structure=metadata
-                    )
-                    process.file_keys.append(process_file_key)
+                    
+                    # Check if a file key with this name already exists
+                    existing_key = ProcessFileKey.query.filter_by(
+                        process_id=process.id,
+                        key_name=key_name
+                    ).first()
+                    
+                    if existing_key:
+                        # Update existing key
+                        existing_key.required_structure = metadata
+                    else:
+                        # Add new file key
+                        process_file_key = ProcessFileKey(
+                            key_name=key_name,
+                            required_structure=metadata
+                        )
+                        process.file_keys.append(process_file_key)
+                        
                 except FileNotFoundError:
                     return jsonify({"error": f"File metadata not found for {filename}"}), 400
 
