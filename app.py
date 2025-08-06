@@ -1516,9 +1516,8 @@ def process_natural_language():
         elif data["operation_type"] == "format":
             try:
                 print("[DEBUG] Processing format operation")
-                
-                # Get DataFrame
-                print(f"[DEBUG] Fetching DataFrame - Name: {data['tableName']}")
+
+                # Fetch the source DataFrame
                 dataframe = DataFrame.query.filter_by(
                     name=data["tableName"],
                     process_id=data["process_id"]
@@ -1529,113 +1528,146 @@ def process_natural_language():
                         "error": f"DataFrame {data['tableName']} not found in process {data['process_id']}"
                     }), 404
 
-                # Initialize variables
-                metadata = None
-                result = None
-                
-                try:
-                    # Get metadata from storage
-                    metadata_path = f"{email}/process/{data['process_id']}/metadata/{data['tableName']}.json"
-                    metadata_blob = bucket.blob(metadata_path)
-                    
-                    if not metadata_blob.exists():
-                        print(f"[DEBUG] Metadata not found: {metadata_path}")
-                        return jsonify({"error": f"Metadata for table {data['tableName']} not found"}), 404
-                        
-                    metadata = json.loads(metadata_blob.download_as_string())
-                    print(f"[DEBUG] Metadata from storage loaded successfully")
-                    
-                    # Transform metadata before using it
-                    transformed_metadata = transform_metadata(metadata)
-                    
-                    # Call run_chain with transformed metadata
-                    result = run_chain(
-                        user_input=data["query"],
-                        operation_type=data["operation_type"],
-                        table_name=data["tableName"],
-                        process_id=data["process_id"],
-                        dataframe_metadata=transformed_metadata,
-                        table2_metadata=None
-                    )
-                    
-                    if not result.get("success"):
-                        print(f"[DEBUG] run_chain error: {result.get('error')}")
-                        return jsonify({"error": result.get("error")}), 400
-                        
-                except Exception as e:
-                    print(f"[DEBUG] Metadata processing error: {str(e)}")
-                    return jsonify({"error": f"Error processing metadata: {str(e)}"}), 500
+                # Load metadata JSON from storage bucket
+                metadata_path = f"{email}/process/{data['process_id']}/metadata/{data['tableName']}.json"
+                metadata_blob = bucket.blob(metadata_path)
+                if not metadata_blob.exists():
+                    return jsonify({
+                        "error": f"Metadata for table {data['tableName']} not found"
+                    }), 404
+
+                metadata = json.loads(metadata_blob.download_as_string())
+
+                # Transform metadata as needed
+                transformed_metadata = transform_metadata(metadata)
+
+                # Call AI chain to get formatting parameters
+                result = run_chain(
+                    user_input=data["query"],
+                    operation_type="format",
+                    table_name=data["tableName"],
+                    process_id=data["process_id"],
+                    dataframe_metadata=transformed_metadata,
+                    table2_metadata=None
+                )
 
                 if not result or not result.get("parameters"):
                     return jsonify({"error": "Failed to generate format parameters"}), 500
 
-                # Update parameters with output table name if provided
-                if output_table_name:
-                    result["parameters"]["outputTableName"] = output_table_name
-                elif not result["parameters"].get("outputTableName"):
-                    result["parameters"]["outputTableName"] = f"{data['tableName']}_formatted"
+                # Determine output table name
+                output_table_name = data.get("output_table_name") or result["parameters"].get("outputTableName") or f"{data['tableName']}_formatted"
+                result["parameters"]["outputTableName"] = output_table_name
 
-                # Just return the AI-selected parameters without processing
-                return jsonify({
-                    "success": True,
-                    "operation_details": {
-                        "sourceTable": result["parameters"].get("tableName"),
-                        "dataframeId": dataframe.id,
-                        "message": "Format parameters selected by AI",
-                        "newTableName": result["parameters"].get("outputTableName"),
+                # Create a DataFrameOperation record for audit trail
+                df_operation = DataFrameOperation(
+                    process_id=data["process_id"],
+                    dataframe_id=dataframe.id,
+                    operation_type="format",
+                    operation_subtype="format",
+                    payload=result["parameters"]
+                )
+                db.session.add(df_operation)
+                db.session.commit()
+
+                # === Call your backend function to perform the actual formatting ===
+                # This function you must implement similar to your other operations
+                operation_result = process_format_table(
+                    email=email,
+                    process_id=data["process_id"],
+                    source_df=dataframe,
+                    format_params=result["parameters"],
+                    output_table_name=output_table_name
+                )
+
+                print(f"[DEBUG] Format operation result: {operation_result}")
+
+                if operation_result.get('success'):
+                    df_operation.set_success()
+                    db.session.commit()
+
+                    # Update AIRequest with success response info
+                    ai_request.response = {
+                        'ai_response': result,
+                        'parameters': result.get("parameters"),
+                        'metadata_used': result.get("metadata_used"),
+                        'domain': result.get("domain"),
+                        'tokens_used': result.get("domain", {}).get("tokens_used"),
+                        'confidence': result.get("domain", {}).get("confidence")
+                    }
+                    ai_request.status = 'success'
+                    ai_request.response_time = datetime.now(timezone.utc)
+                    db.session.commit()
+
+                    # Load updated metadata of the new formatted table
+                    try:
+                        updated_metadata_path = f"{email}/process/{data['process_id']}/metadata/{output_table_name}.json"
+                        updated_metadata_blob = bucket.blob(updated_metadata_path)
+                        if updated_metadata_blob.exists():
+                            updated_metadata = json.loads(updated_metadata_blob.download_as_string())
+                        else:
+                            updated_metadata = None
+                    except Exception as e:
+                        print(f"[DEBUG] Could not fetch updated metadata: {str(e)}")
+                        updated_metadata = None
+
+                    # Return success response with details
+                    return jsonify({
+                        "success": True,
+                        "operation_details": {
+                            "id": df_operation.id,
+                            "sourceTable": data["tableName"],
+                            "dataframeId": df_operation.dataframe_id,
+                            "message": operation_result.get("message", "Format operation completed successfully"),
+                            "newTableName": output_table_name,
+                            "aiRequestId": ai_request.id,
+                            "retryCount": ai_request.retry_count,
+                            "maxRetries": ai_request.max_retries,
+                            "tokens_used": result.get("domain", {}).get("tokens_used"),
+                            "confidence": result.get("domain", {}).get("confidence")
+                        },
+                        "parameters": result["parameters"],
+                        "metadata_used": result.get("metadata_used"),
+                        "domain": result.get("domain"),
+                        "updated_metadata": updated_metadata
+                    })
+
+                else:
+                    df_operation.set_error(operation_result.get('error', 'Unknown error during format processing'))
+                    ai_request.status = 'error'
+                    ai_request.error_message = operation_result.get('error', 'Unknown error during format processing')
+                    ai_request.response_time = datetime.now(timezone.utc)
+                    db.session.commit()
+                    return jsonify({
+                        "success": False,
+                        "error": operation_result.get('error', 'Format operation failed'),
+                        "operationId": df_operation.id,
                         "aiRequestId": ai_request.id
-                    },
-                    "parameters": result["parameters"],
-                    "metadata_used": result.get("metadata_used"),
-                    "domain": result.get("domain")
-                })
+                    }), 400
 
             except Exception as e:
-                print(f"[DEBUG] Error in format processing: {str(e)}")
+                print(f"[DEBUG] Exception during format operation: {str(e)}")
                 import traceback
                 print(f"[DEBUG] Traceback: {traceback.format_exc()}")
-                
-                # Rollback the session before attempting to set error
                 db.session.rollback()
-                
+
                 try:
-                    # Store error in AI request
                     ai_request.status = 'error'
                     ai_request.error_message = str(e)
                     ai_request.response_time = datetime.now(timezone.utc)
-                    # Skip processing duration calculation to avoid timezone issues
                     db.session.commit()
                 except Exception as inner_e:
-                    print(f"[DEBUG] Error setting error status: {str(inner_e)}")
+                    print(f"[DEBUG] Failed to update AIRequest error status: {str(inner_e)}")
                     db.session.rollback()
-                    
-                return jsonify({"error": str(e)}), 500
 
-        # For other operation types, return the original result
-        print("[DEBUG] Returning successful response")
-        return jsonify(result)
-
-    except Exception as e:
-        print(f"[DEBUG] Unexpected error: {str(e)}")
-        import traceback
-        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
-        
-        # Rollback the session before attempting to set error
-        db.session.rollback()
-        
-        try:
-            # Store error in AI request if it exists
-            if ai_request:
-                ai_request.status = 'error'
-                ai_request.error_message = str(e)
-                ai_request.response_time = datetime.now(timezone.utc)
-                # Skip processing duration calculation to avoid timezone issues
-                db.session.commit()
-        except Exception as inner_e:
-            print(f"[DEBUG] Error setting error status: {str(inner_e)}")
-            db.session.rollback()
-            
-        return jsonify({"error": str(e)}), 500
+                # Return friendly AI-like error reply (you can customize this)
+                return jsonify({
+                    "success": False,
+                    "reply": (
+                        "Sorry, I encountered an error while processing your format request. "
+                        "Please check your input and try again."
+                    ),
+                    "error_details": str(e)
+                }), 500
 
 @nlp_bp.route("/regex", methods=["POST"])
 def generate_regex_pattern():
