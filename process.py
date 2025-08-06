@@ -2142,7 +2142,6 @@ def manage_process_operations(process_id):
                 return jsonify({"error": f"Missing required field: {field}"}), 400
 
         operation_type = data.get('operationType')
-        title = data.get('title')
 
         if operation_type == 'edit_file':
             batch_operation = DataFrameBatchOperation.query.get(data['dataframeOperationId'])
@@ -2151,8 +2150,8 @@ def manage_process_operations(process_id):
 
             process_operation = ProcessOperation(
                 process_id=process_id,
-                title = deleted_operation_info.title or "Define Inputs",
-                description = deleted_operation_info.description or "",
+                title = deleted_operation_info.get('title') or 'Define Inputs',
+                description = deleted_operation_info.get('description') or "",
                 sequence=float(data['sequence']),
                 operation_name='edit_file',
                 parameters={**batch_operation.payload, 'batchOperationId': batch_operation.id},
@@ -2163,7 +2162,7 @@ def manage_process_operations(process_id):
             if not df_operation or df_operation.process_id != process_id:
                 return jsonify({"error": "DataFrameOperation not found or does not belong to this process"}), 404
             
-            operation_title = deleted_operation_info.title or None  # Default to provided title
+            operation_title = None  # Default to provided title
             if not operation_title:
                 if df_operation.operation_type == "add_column":
                     subtype = df_operation.operation_subtype.lower()
@@ -2194,8 +2193,8 @@ def manage_process_operations(process_id):
 
             process_operation = ProcessOperation(
                 process_id=process_id,
-                title = operation_title,
-                description = deleted_operation_info.description or "",
+                title = deleted_operation_info.get('title') or operation_title,
+                description = deleted_operation_info.get('description') or '',
                 sequence=float(data['sequence']),
                 operation_name=df_operation.operation_type,
                 parameters=df_operation.payload,
