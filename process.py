@@ -2128,12 +2128,13 @@ def manage_process_operations(process_id):
             db.session.delete(operation)
 
             # Resequence remaining operations
-            remaining_ops = ProcessOperation.query.filter_by(process_id=process_id)\
-                .order_by(ProcessOperation.sequence).all()
+            remaining_ops = ProcessOperation.query.filter_by(
+                process_id == process_id,
+                id != operation_to_delete_id
+            ).order_by(ProcessOperation.sequence).all()
 
             for index, op in enumerate(remaining_ops):
-                if op.id != operation_to_delete_id:
-                    op.sequence = float(index + 1)
+                op.sequence = float(index + 1)
 
         # === Addition part ===
         required_fields = ['dataframeOperationId', 'sequence']
