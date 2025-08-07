@@ -110,6 +110,11 @@ def perform_horizontal_merge(df1, df2, key_pairs, method, show_count_summary):
                     how=method,
                     indicator=show_count_summary
                 )
+
+                df1_cols = list(df1.columns)
+                df2_new_cols = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                merged_df = merged_df[df1_cols + df2_new_cols]
+                
                 print(f"\nMerge successful. Result shape: {merged_df.shape}")
             except Exception as e:
                 # Enhanced error reporting
@@ -301,6 +306,10 @@ def process_merge_tables(email, process_id, table1, table2, merge_type, merge_me
                     how=merge_method,
                     indicator=show_count_summary
                 )
+
+                df1_cols = list(df1.columns)
+                df2_new_cols = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                merged_df = merged_df[df1_cols + df2_new_cols]
 
                 # Get merge statistics if requested
                 merge_stats = None
@@ -635,6 +644,10 @@ def preview_file():
                     how=merge_method,
                     indicator=show_count_summary
                 )
+
+                df1_cols = list(df1.columns)
+                df2_new_cols = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                merged_df = merged_df[df1_cols + df2_new_cols]
 
             count_summary = {}
             if show_count_summary and "_merge" in merged_df.columns:
