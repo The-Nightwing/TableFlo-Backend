@@ -110,6 +110,16 @@ def perform_horizontal_merge(df1, df2, key_pairs, method, show_count_summary):
                     how=method,
                     indicator=show_count_summary
                 )
+
+                # Get the final column order: original df1 + new (non-key) columns from df2
+                left_columns = list(df1.columns)
+                # Exclude right keys and also avoid duplicates
+                right_new_columns = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                final_column_order = left_columns + right_new_columns
+
+                # Filter merged_df to keep only those columns, if they exist in the result
+                merged_df = merged_df[[col for col in final_column_order if col in merged_df.columns]]
+
                 print(f"\nMerge successful. Result shape: {merged_df.shape}")
             except Exception as e:
                 # Enhanced error reporting
@@ -302,6 +312,15 @@ def process_merge_tables(email, process_id, table1, table2, merge_type, merge_me
                     indicator=show_count_summary
                 )
 
+                # Get the final column order: original df1 + new (non-key) columns from df2
+                left_columns = list(df1.columns)
+                # Exclude right keys and also avoid duplicates
+                right_new_columns = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                final_column_order = left_columns + right_new_columns
+
+                # Filter merged_df to keep only those columns, if they exist in the result
+                merged_df = merged_df[[col for col in final_column_order if col in merged_df.columns]]
+
                 # Get merge statistics if requested
                 merge_stats = None
                 if show_count_summary and '_merge' in merged_df.columns:
@@ -320,13 +339,13 @@ def process_merge_tables(email, process_id, table1, table2, merge_type, merge_me
 
         elif merge_type == 'vertical':
             # Check if columns match or need alignment
-            common_columns = set(df1.columns) & set(df2.columns)
+            common_columns = [col for col in df1.columns if col in df2.columns]
             if not common_columns:
                 return {"success": False, "error": "No common columns found for vertical merge"}
 
             # Align columns if needed
-            df1_aligned = df1[list(common_columns)]
-            df2_aligned = df2[list(common_columns)]
+            df1_aligned = df1[common_columns]
+            df2_aligned = df2[common_columns]
 
             # Perform vertical merge (concatenation)
             merged_df = pd.concat([df1_aligned, df2_aligned], axis=0, ignore_index=True)
@@ -335,8 +354,8 @@ def process_merge_tables(email, process_id, table1, table2, merge_type, merge_me
                 "type": "vertical",
                 "commonColumns": list(common_columns),
                 "droppedColumns": {
-                    "table1": list(set(df1.columns) - common_columns),
-                    "table2": list(set(df2.columns) - common_columns)
+                    "table1": list(set(df1.columns) - set(common_columns)),
+                    "table2": list(set(df2.columns) - set(common_columns))
                 }
             }
 
@@ -635,6 +654,15 @@ def preview_file():
                     how=merge_method,
                     indicator=show_count_summary
                 )
+
+                # Get the final column order: original df1 + new (non-key) columns from df2
+                left_columns = list(df1.columns)
+                # Exclude right keys and also avoid duplicates
+                right_new_columns = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                final_column_order = left_columns + right_new_columns
+
+                # Filter merged_df to keep only those columns, if they exist in the result
+                merged_df = merged_df[[col for col in final_column_order if col in merged_df.columns]]
 
             count_summary = {}
             if show_count_summary and "_merge" in merged_df.columns:
