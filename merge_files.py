@@ -349,7 +349,7 @@ def process_merge_tables(email, process_id, table1, table2, merge_type, merge_me
 
             # Perform vertical merge (concatenation)
             merged_df = pd.concat([df1_aligned, df2_aligned], axis=0, ignore_index=True)
-            
+            merged_df = merged_df[common_columns]
             merge_info = {
                 "type": "vertical",
                 "commonColumns": list(common_columns),
