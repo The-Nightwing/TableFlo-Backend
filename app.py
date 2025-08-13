@@ -1,3 +1,4 @@
+import asyncio
 from flask import Blueprint, request, jsonify
 from flask import Blueprint, request, jsonify
 from models import DataFrame, UserProcess, DataFrameOperation, OperationType, db, FormattingStep, AIRequest, User
@@ -712,7 +713,9 @@ def process_natural_language():
 
                 # Update parameters with output table name if provided
                 if output_table_name:
-                    result["parameters"]["newTableName"] = output_table_name
+                    result["parameters"]["output_table_name"] = output_table_name
+                elif not result["parameters"].get("output_table_name"):
+                    result["parameters"]["output_table_name"] = f"{data['tableName']}_columnadded"
                 
                 # Fix operations format if needed
                 if result["parameters"].get("operationType") == "calculate":
@@ -782,7 +785,7 @@ def process_natural_language():
                             "sourceTable": result["parameters"].get("tableName"),
                             "dataframeId": df_operation.dataframe_id,
                             "message": operation_result.get('message'),
-                            "newTableName": result["parameters"].get("newTableName"),
+                            "newTableName": result["parameters"].get("output_table_name"),
                             "aiRequestId": ai_request.id,
                             "retryCount": ai_request.retry_count,
                             "maxRetries": ai_request.max_retries,
@@ -1671,7 +1674,7 @@ def generate_regex_pattern():
 
         try:
             # Call run_chain with regex-specific prompt
-            result = run_chain(
+            result = asyncio.run(run_chain(
                 user_input=data["description"],
                 operation_type="regex",
                 table_name=None,  # Not needed for regex
@@ -1685,7 +1688,7 @@ def generate_regex_pattern():
                     "columnTypes": {}
                 },
                 table2_metadata=None
-            )
+            ))
 
             if not result.get("success"):
                 print(f"[DEBUG] run_chain error: {result.get('error')}")
