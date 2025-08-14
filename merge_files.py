@@ -303,9 +303,15 @@ def process_merge_tables(email, process_id, table1, table2, merge_type, merge_me
                     left_keys.append(left_key)
                     right_keys.append(right_key)
 
+                for lk, rk in zip(left_keys, right_keys):
+                    if df1[lk].dtype != df2[rk].dtype:
+                        df1[lk] = df1[lk].astype(str)
+                        df2[rk] = df2[rk].astype(str)
+
                 # Perform merge with specified method
                 merged_df = pd.merge(
-                    df1, df2,
+                    df1,
+                    df2,
                     left_on=left_keys,
                     right_on=right_keys,
                     how=merge_method,

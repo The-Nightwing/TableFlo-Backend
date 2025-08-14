@@ -576,14 +576,16 @@ def process_columns():
 
         results = []
         error_messages = []
-
+        fileNames = []
+        tableNames = []
         # Process each table
         for table_config in tables:
             table_name = table_config.get('tableName')
             if not table_name:
                 error_messages.append("Table name is required for each table configuration")
                 continue
-
+            
+            tableNames.append(table_name)
             # Get the DataFrame
             dataframe = DataFrame.query.filter_by(
                 process_id=process_id,
@@ -617,6 +619,7 @@ def process_columns():
                     "tableName": table_name
                 })
                 results.append(result)
+                fileNames.append(result.get('metadata')['originalFileName'])
 
             except Exception as e:
                 error_msg = f"Error processing {table_name}: {str(e)}"
@@ -627,6 +630,8 @@ def process_columns():
                     "error": str(e)
                 })
 
+        description = f'Select files {", ".join(tableNames)} from files {", ".join(fileNames)}'
+        batch_operation.message = description
         db.session.commit()
         
         response = {
