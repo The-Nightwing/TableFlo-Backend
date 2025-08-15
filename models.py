@@ -265,7 +265,12 @@ class DataFrame(db.Model):
     __tablename__ = 'dataframes'
 
     id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
-    process_id = db.Column(db.String(36), db.ForeignKey('user_processes.id'), nullable=False)
+    process_id = db.Column(
+        db.String(36),
+        db.ForeignKey('user_processes.id', ondelete="CASCADE"),
+        nullable=False
+    )
+
     user_id = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=True)  # Optional link to user
     name = db.Column(db.String(255), nullable=False)  # Name/identifier of the DataFrame
     email = db.Column(db.String(120), nullable=False)  # Owner's email
@@ -279,7 +284,11 @@ class DataFrame(db.Model):
     is_originally_uploaded = db.Column(db.Boolean, default=False, nullable=True)  # Track if this was an uploaded file
 
     # Relationships
-    process = db.relationship('UserProcess', backref='dataframes', lazy=True)
+    process = db.relationship(
+        'UserProcess',
+        backref=db.backref('dataframes', cascade="all, delete-orphan"),
+        lazy=True
+    )
     user = db.relationship('User', backref='dataframes', lazy=True)
 
     def __init__(self, process_id, name, email, row_count, column_count, storage_path, user_id=None, data_metadata=None, is_originally_uploaded=False):
@@ -555,7 +564,7 @@ class DataFrameBatchOperation(db.Model):
     __tablename__ = 'dataframe_batch_operations'
 
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    process_id = db.Column(db.String(36), db.ForeignKey('user_processes.id'), nullable=False)
+    process_id = db.Column(db.String(36), db.ForeignKey('user_processes.id', ondelete="CASCADE"), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='in_progress')  # in_progress, success, error, partial_success
     error_message = db.Column(db.Text)
     message = db.Column(db.Text, nullable=True)  # New nullable message field
@@ -576,7 +585,12 @@ class DataFrameBatchOperation(db.Model):
     successful_dataframes = db.Column(db.Integer, default=0)
     
     # Relationships
-    process = db.relationship('UserProcess', backref='batch_operations')
+    process = db.relationship(
+        'UserProcess',
+        backref=db.backref('batch_operations', cascade="all, delete-orphan"),
+        lazy=True
+    )
+
 
     def set_success(self):
         """Mark the operation as successful"""
