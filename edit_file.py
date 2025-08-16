@@ -561,11 +561,26 @@ def process_columns():
         process = UserProcess.query.filter_by(id=process_id, user_id=user.id).first()
         if not process:
             return jsonify({"error": "Process not found or access denied"}), 404
+        
+        allDataframes = DataFrame.query.filter_by(
+            process_id=process_id,
+            is_active=True,
+            is_originally_uploaded=True).all()
+        
+        tableNames = []
+        fileNames = []
+        for dataframe in allDataframes:
+            metadata = dataframe.data_metadata
+            tableNames.append(metadata.get('tableName'))
+            fileNames.append(metadata.get('originalFileName'))
+
+        description = f'Select files {", ".join(tableNames)} from files {", ".join(fileNames)}'
 
         # Create batch operation record
         batch_operation = DataFrameBatchOperation(
             process_id=process_id,
             payload=data,
+            message = description,
             dataframe_ids=[],
             operation_ids=[],  # This will remain empty as we're not creating individual operations
             total_dataframes=len(tables)
@@ -576,8 +591,7 @@ def process_columns():
 
         results = []
         error_messages = []
-        fileNames = []
-        tableNames = []
+
         # Process each table
         for table_config in tables:
             table_name = table_config.get('tableName')
@@ -585,7 +599,6 @@ def process_columns():
                 error_messages.append("Table name is required for each table configuration")
                 continue
             
-            tableNames.append(table_name)
             # Get the DataFrame
             dataframe = DataFrame.query.filter_by(
                 process_id=process_id,
@@ -619,7 +632,6 @@ def process_columns():
                     "tableName": table_name
                 })
                 results.append(result)
-                fileNames.append(result.get('metadata')['originalFileName'])
 
             except Exception as e:
                 error_msg = f"Error processing {table_name}: {str(e)}"
@@ -630,8 +642,6 @@ def process_columns():
                     "error": str(e)
                 })
 
-        description = f'Select files {", ".join(tableNames)} from files {", ".join(fileNames)}'
-        batch_operation.message = description
         db.session.commit()
         
         response = {

@@ -2136,6 +2136,20 @@ def manage_process_operations(process_id):
 
         operation_type = data.get('operationType')
 
+        allDataframes = DataFrame.query.filter_by(
+                process_id=process_id,
+                is_active=True,
+                is_originally_uploaded=True).all()
+        
+        tableNames = []
+        fileNames = []
+        for dataframe in allDataframes:
+            metadata = dataframe.data_metadata
+            tableNames.append(metadata.get('tableName'))
+            fileNames.append(metadata.get('originalFileName'))
+
+        description = f'Select files {", ".join(tableNames)} from files {", ".join(fileNames)}'
+
         if operation_type == 'edit_file':
             batch_operation = DataFrameBatchOperation.query.get(data['dataframeOperationId'])
             if not batch_operation or batch_operation.process_id != process_id:
@@ -2144,7 +2158,7 @@ def manage_process_operations(process_id):
             process_operation = ProcessOperation(
                 process_id=process_id,
                 title = deleted_operation_info.get('title') or 'Define Inputs',
-                description = deleted_operation_info.get('description') or "",
+                description = description or '',
                 sequence=float(data['sequence']),
                 operation_name='edit_file',
                 parameters={**batch_operation.payload, 'batchOperationId': batch_operation.id},
@@ -2187,7 +2201,7 @@ def manage_process_operations(process_id):
             process_operation = ProcessOperation(
                 process_id=process_id,
                 title = deleted_operation_info.get('title') or operation_title,
-                description = deleted_operation_info.get('description') or '',
+                description = description or '',
                 sequence=float(data['sequence']),
                 operation_name=df_operation.operation_type,
                 parameters=df_operation.payload,
