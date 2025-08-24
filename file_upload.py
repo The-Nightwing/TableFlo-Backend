@@ -651,6 +651,9 @@ def store_dataframe_from_file(email, process_id, table_name, file_id, sheet_name
             name=table_name
         ).first()
 
+        if existing_df:
+            raise ValueError(f'File with TableId {table_name} already exists.')
+        
         # Get data from file using existing function
         file_data = get_sheet_data_from_file(
             email=email,

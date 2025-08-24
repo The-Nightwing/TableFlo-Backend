@@ -1318,8 +1318,25 @@ def update_formatting_step(formatting_step_id):
             return jsonify({"error": "Formatting step not found or access denied"}), 404
 
         try:
+            config = data['configuration']
+
+            if "formattingConfigs" in config:
+                row_count = None
+                if formatting_step.source_dataframe:
+                    row_count = formatting_step.source_dataframe.row_count  # e.g., 2178
+
+                for fc in config["formattingConfigs"]:
+                    if "location" in fc and "range" in fc["location"]:
+                        original_range = fc["location"]["range"]
+                        # If the range is column-only (like "F:H"), expand with rows
+                        if ":" in original_range and not any(ch.isdigit() for ch in original_range):
+                            start_col, end_col = original_range.split(":")
+                            end_row = row_count + 1 if row_count else 1048576  # include header offset
+                            fc["location"]["range"] = f"{start_col}2:{end_col}{end_row}"
+
+
             # Update configuration
-            formatting_step.configuration = data['configuration']
+            formatting_step.configuration = config
             formatting_step.updated_at = datetime.now(timezone.utc)
             
             db.session.add(formatting_step)
