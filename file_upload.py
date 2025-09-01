@@ -652,9 +652,7 @@ def store_dataframe_from_file(email, process_id, table_name, file_id, sheet_name
         ).first()
 
         if existing_df:
-            return jsonify({
-                "error": f'File with TableId {table_name} already exists.'
-            }), 409
+            return None
         
         # Get data from file using existing function
         file_data = get_sheet_data_from_file(
@@ -831,7 +829,18 @@ def store_process_data():
             description=description
         )
 
-        return jsonify(result)
+        if result:
+            return jsonify(result)
+        else:
+            return jsonify({
+                "error": f'File with TableId {table_name} already exists.',
+                "existingProcess": {
+                    "id": process.id,
+                    "name": process.process_name,
+                    "createdAt": process.created_at.isoformat(),
+                    "updatedAt": process.updated_at.isoformat()
+                }
+            }), 409
 
     except Exception as e:
         print(f"Error in store_process_data endpoint: {str(e)}")
