@@ -38,7 +38,7 @@ def initialize_firebase():
 
             # ✅ Correct way to initialize Google Cloud Storage
             storage_client = storage.Client.from_service_account_info(service_account)  
-            bucket_name = "file-processing-app.firebasestorage.app"  # Ensure bucket name is correct
+            bucket_name = "tableflo-dev.firebasestorage.app"  # Ensure bucket name is correct
             st.session_state.storage_bucket = storage_client.bucket(bucket_name)
 
             st.success(f"✅ Firebase Storage initialized with bucket: {st.session_state.storage_bucket.name}")
@@ -52,7 +52,7 @@ def initialize_firebase():
     if 'storage_bucket' not in st.session_state:
         try:
             storage_client = storage.Client.from_service_account_info(st.secrets["firebase_service_account"])
-            st.session_state.storage_bucket = storage_client.bucket("file-processing-app.firebasestorage.app")
+            st.session_state.storage_bucket = storage_client.bucket("tableflo-dev.firebasestorage.app")
         except Exception as e:
             st.error(f"🔥 Error initializing Firebase Storage: {e}")
             return False
