@@ -25,7 +25,7 @@ Archive.zip
 *.p12
 
 # Firebase credentials
-file-processing-app-f7c073da43a3.json
+tableflo-dev-firebase-adminsdk-fbsvc-4aaddd2bb7.json
 *.firebase.json
 config.py
 firebase_config.py
