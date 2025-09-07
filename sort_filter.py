@@ -515,6 +515,21 @@ def get_column_type(series):
 
 def apply_filter(df, column, operator, value):
     """Apply filter operation to DataFrame."""
+
+    if pd.api.types.is_numeric_dtype(df[column]):
+        if df[column].dtype == 'int64' or df[column].dtype == 'int32':
+            value = int(value)
+        elif df[column].dtype == 'float64' or df[column].dtype == 'float32':
+            value = float(value)
+    elif pd.api.types.is_datetime64_any_dtype(df[column]):
+        value = pd.to_datetime(value)  # Convert to datetime for datetime columns
+    elif pd.api.types.is_categorical_dtype(df[column]):
+        value = str(value)  # Convert to string for categorical columns
+    elif pd.api.types.is_bool_dtype(df[column]):
+        value = bool(value)  # Convert to boolean for boolean columns
+    else:
+        value = str(value)  # Default to string for other types
+
     if operator == "equals":
         return df[df[column] == value]
     elif operator == "not_equals":
