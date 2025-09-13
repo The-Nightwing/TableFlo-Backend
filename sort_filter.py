@@ -506,12 +506,19 @@ def get_column_type(series):
         return 'datetime'
     elif dtype_str.startswith('bool'):
         return 'boolean'
-    else:
+    elif dtype_str.startswith('object'):
+        # Try to convert the whole series to datetime
         try:
-            pd.to_datetime(series.dropna().iloc[0])
-            return 'datetime'
-        except (ValueError, IndexError):
-            return 'string'
+            converted = pd.to_datetime(series, errors='coerce')
+            non_null = series.dropna()
+            valid_dates = converted.dropna()
+            if len(valid_dates) >= 0.5 * len(non_null):
+                return 'datetime'
+        except Exception:
+            pass
+        return 'string'
+    else:
+        return 'string'
 
 def apply_filter(df, column, operator, value):
     """Apply filter operation to DataFrame."""
