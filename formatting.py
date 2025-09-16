@@ -728,13 +728,24 @@ def process_dataframe_formatting(email, process_id, source_df, formatting_config
 
                 # Parse the range string to get ranges and type
                 ranges, range_type = parse_range(range_str)
+                
+                # Expand column ranges like 'A:D' to 'A2:D{last_row}' for Excel formatting
+                expanded_ranges = []
+                if range_type == 'columns' and len(ranges) > 1:
+                    # Find first and last column
+                    start_col = ranges[0]
+                    end_col = ranges[-1]
+                    last_row = len(df)
+                    expanded_ranges.append(f"{start_col}2:{end_col}{last_row}")
+                else:
+                    expanded_ranges = ranges
 
                 format_info = {
                     "type": format_type,
                     "location": location,
                     "details": format_details,
                     "rangeType": range_type,
-                    "ranges": ranges
+                    "ranges": expanded_ranges
                 }
 
                 # Apply formatting based on type
@@ -831,8 +842,10 @@ def process_dataframe_formatting(email, process_id, source_df, formatting_config
                     width = format_details.get('columnWidth')
                     if range_type != 'columns':
                         raise ValueError("Column width can only be applied to column ranges")
+                    
                     for range_item in ranges:
-                        worksheet.set_column(f'{range_item}:{range_item}', width)
+                        # range_item can be 'A' or 'A:C'
+                        worksheet.set_column(range_item, width)
 
                 elif format_type == 'Conditional Formatting':
                     conditional = format_details.get('conditional', {})
