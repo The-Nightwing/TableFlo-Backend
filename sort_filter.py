@@ -109,9 +109,21 @@ def preview_filter_data():
             value = config['value']
 
             if criteria == "equals":
-                df = df[df[column] == value]
+                if pd.api.types.is_numeric_dtype(df[column]):
+                    try:
+                        df = df[df[column] == float(value)]
+                    except (ValueError, TypeError):
+                        df = df[df[column] == value]
+                else:
+                    df = df[df[column] == value]
             elif criteria == "does not equal":
-                df = df[df[column] != value]
+                if pd.api.types.is_numeric_dtype(df[column]):
+                    try:
+                        df = df[df[column] != float(value)]
+                    except (ValueError, TypeError):
+                        df = df[df[column] != value]
+                else:
+                    df = df[df[column] != value]
             elif criteria == "greater than":
                 # Handle date filtering
                 if pd.api.types.is_datetime64_any_dtype(df[column]):
@@ -538,9 +550,49 @@ def apply_filter(df, column, operator, value):
         value = str(value)  # Default to string for other types
 
     if operator == "equals":
-        return df[df[column] == value]
+        col = df[column]
+        # Numeric
+        if pd.api.types.is_numeric_dtype(col):
+            try:
+                return df[col == float(value)]
+            except (ValueError, TypeError):
+                return df[col == value]
+        # Datetime
+        elif pd.api.types.is_datetime64_any_dtype(col):
+            try:
+                return df[col == pd.to_datetime(value)]
+            except (ValueError, TypeError):
+                return df[col == value]
+        # Boolean
+        elif pd.api.types.is_bool_dtype(col):
+            if isinstance(value, str):
+                val = value.lower() in ["true", "1", "yes"]
+            else:
+                val = bool(value)
+            return df[col == val]
+        # String or object
+        else:
+            return df[col.astype(str) == str(value)]
     elif operator == "not_equals":
-        return df[df[column] != value]
+        col = df[column]
+        if pd.api.types.is_numeric_dtype(col):
+            try:
+                return df[col != float(value)]
+            except (ValueError, TypeError):
+                return df[col != value]
+        elif pd.api.types.is_datetime64_any_dtype(col):
+            try:
+                return df[col != pd.to_datetime(value)]
+            except (ValueError, TypeError):
+                return df[col != value]
+        elif pd.api.types.is_bool_dtype(col):
+            if isinstance(value, str):
+                val = value.lower() in ["true", "1", "yes"]
+            else:
+                val = bool(value)
+            return df[col != val]
+        else:
+            return df[col.astype(str) != str(value)]
     elif operator == "contains":
         return df[df[column].astype(str).str.contains(str(value), case=False, na=False)]
     elif operator == "not_contains":
