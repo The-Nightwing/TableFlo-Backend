@@ -193,49 +193,29 @@ def apply_rename_operation(df, columns_config):
     return df.rename(columns=rename_map)
 
 def get_column_type(series):
-    """Determine the type of a pandas Series, defaulting to string if not easily determined."""
-    try:
-        # If it's not a Series, try to convert it
-        if not isinstance(series, pd.Series):
-            try:
-                series = pd.Series(series)
-            except Exception:
-                return 'string'  # Default to string if conversion fails
-
-        non_null = series.dropna()
-        if len(non_null) == 0:
-            return 'string'
-        
-        # Check for boolean
-        unique_values = set(non_null.astype(str).str.lower())
-        boolean_values = {'true', 'false', '1', '0', 'yes', 'no'}
-        if unique_values.issubset(boolean_values):
-            return 'boolean'
-        
-        # Check for numeric
+    """Helper function to determine column type"""
+    dtype_str = str(series.dtype)
+    if dtype_str.startswith('int'):
+        return 'integer'
+    elif dtype_str.startswith('float'):
+        return 'float'
+    elif dtype_str.startswith('datetime'):
+        return 'datetime'
+    elif dtype_str.startswith('bool'):
+        return 'boolean'
+    elif dtype_str.startswith('object'):
+        # Try to convert the whole series to datetime
         try:
-            # First try to convert to numeric
-            numeric_series = pd.to_numeric(non_null)
-            
-            # Check if all values are integers
-            if all(numeric_series.apply(lambda x: float(x).is_integer())):
-                return 'integer'
-            else:
-                return 'float'
-        except (ValueError, TypeError):
+            converted = pd.to_datetime(series, errors='coerce')
+            non_null = series.dropna()
+            valid_dates = converted.dropna()
+            if len(valid_dates) >= 0.5 * len(non_null):
+                return 'datetime'
+        except Exception:
             pass
-        
-        # Check for date
-        try:
-            pd.to_datetime(non_null)
-            return 'date'
-        except (ValueError, TypeError):
-            pass
-        
-        # Default to string for everything else
         return 'string'
-    except Exception:
-        return 'string'  # Default to string for any other errors
+    else:
+        return 'string'
 
 def save_processed_file(email, df, output_file_name, sheet_name):
     """Save processed file, metadata, and preview to Firebase."""

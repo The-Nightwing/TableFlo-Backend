@@ -339,12 +339,7 @@ class DataFrame(db.Model):
             metadata: Optional dictionary containing additional metadata
         """
         def get_column_type(series):
-            """Determine the type of a pandas Series."""
-            if isinstance(series, pd.DataFrame):
-                series = series.iloc[:, 0]
-            if not isinstance(series, pd.Series):
-                series = pd.Series(series)
-
+            """Helper function to determine column type"""
             dtype_str = str(series.dtype)
             if dtype_str.startswith('int'):
                 return 'integer'
@@ -354,12 +349,19 @@ class DataFrame(db.Model):
                 return 'datetime'
             elif dtype_str.startswith('bool'):
                 return 'boolean'
-            else:
+            elif dtype_str.startswith('object'):
+                # Try to convert the whole series to datetime
                 try:
-                    pd.to_datetime(series.dropna().iloc[0])
-                    return 'datetime'
-                except (ValueError, IndexError):
-                    return 'string'
+                    converted = pd.to_datetime(series, errors='coerce')
+                    non_null = series.dropna()
+                    valid_dates = converted.dropna()
+                    if len(valid_dates) >= 0.5 * len(non_null):
+                        return 'datetime'
+                except Exception:
+                    pass
+                return 'string'
+            else:
+                return 'string'
 
         # Convert pandas Series to basic Python types
         null_counts = {k: int(v) for k, v in df.isnull().sum().items()}

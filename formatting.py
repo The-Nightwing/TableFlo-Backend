@@ -275,7 +275,7 @@ def preview_formatting():
         return jsonify({"success": False, "error": str(e)}), 500
 
 def get_column_type(series):
-    """Helper function to get column type"""
+    """Helper function to determine column type"""
     dtype_str = str(series.dtype)
     if dtype_str.startswith('int'):
         return 'integer'
@@ -285,12 +285,19 @@ def get_column_type(series):
         return 'datetime'
     elif dtype_str.startswith('bool'):
         return 'boolean'
-    else:
+    elif dtype_str.startswith('object'):
+        # Try to convert the whole series to datetime
         try:
-            pd.to_datetime(series.dropna().iloc[0])
-            return 'datetime'
-        except (ValueError, IndexError):
-            return 'string'
+            converted = pd.to_datetime(series, errors='coerce')
+            non_null = series.dropna()
+            valid_dates = converted.dropna()
+            if len(valid_dates) >= 0.5 * len(non_null):
+                return 'datetime'
+        except Exception:
+            pass
+        return 'string'
+    else:
+        return 'string'
 
 def apply_format_to_range(ws, range_item, format_type, format_details):
     """Apply formatting to a specific range"""
