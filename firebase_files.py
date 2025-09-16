@@ -1,62 +1,43 @@
 from flask import Blueprint, request, jsonify
 from firebase_config import get_storage_bucket
 from firebase_admin import auth
-from models import File, User, DataFrame, UserProcess, db
+from models import File, db
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Create a Blueprint
 firebase_files_bp = Blueprint('firebase_files', __name__, url_prefix='/api/list-files/')
+
 @firebase_files_bp.route('/', methods=['GET'])
 def list_files():
-    """
-    Endpoint to list all files in Firebase Storage folders with database file IDs
-    """
     email = request.headers.get('X-User-Email')
     if not email:
         return jsonify({'error': 'Email header is required'}), 400
 
-
-    # Retrieve user UID using email
     try:
         user = auth.get_user_by_email(email)
         user_uid = user.uid
-    except auth.UserNotFoundError:
-        return jsonify({'error': 'User not found with the provided email'}), 404
     except Exception as e:
         return jsonify({'error': 'Failed to retrieve user', 'details': str(e)}), 500
 
     try:
-        # Get all file records from database first
         db_files = File.query.filter_by(email=email).all()
-        print(f"📁 Found {len(db_files)} files in database")
-        
         if not db_files:
-            print("⚠️ No files found in database")
-            return jsonify({
-                'files': [],
-                'totalCount': 0,
-                'message': 'No files found for this user'
-            })
+            return jsonify({'files': [], 'totalCount': 0, 'message': 'No files found for this user'})
 
         bucket = get_storage_bucket()
-        file_list = []
-        
-        # Process each database record
-        for db_file in db_files:
+
+        # Fetch existing blobs just once
+        existing_blobs = {blob.name for blob in bucket.list_blobs(prefix=f'{email}/uploaded_files/')}
+
+        def generate_file_info(db_file):
             blob_path = f'{email}/uploaded_files/{db_file.file_name}'
+            if blob_path not in existing_blobs:
+                return None
             blob = bucket.blob(blob_path)
-            
-            # Check if file exists in storage
-            if not blob.exists():
-                print(f"⚠️ File not found in storage: {blob_path}")
-                continue
-            
             try:
                 download_url = blob.generate_signed_url(expiration=604800, version='v4')
-            except Exception as e:
-                continue
-
-            # Create file info dictionary
-            file_info = {
+            except Exception:
+                return None
+            return {
                 'id': db_file.id,
                 'userId': db_file.user_id,
                 'fileName': db_file.file_name,
@@ -64,10 +45,15 @@ def list_files():
                 'uploadTime': db_file.upload_time.strftime("%Y-%m-%d %H:%M:%S") if db_file.upload_time else None,
                 'downloadUrl': download_url,
             }
-            
-            file_list.append(file_info)
 
-        
+        file_list = []
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(generate_file_info, f) for f in db_files]
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    file_list.append(result)
+
         return jsonify({
             'files': file_list,
             'totalCount': len(file_list),
@@ -75,13 +61,13 @@ def list_files():
         })
 
     except Exception as e:
-        print(f"❌ Error processing files: {str(e)}")
         return jsonify({
-            'error': 'Failed to list files', 
+            'error': 'Failed to list files',
             'details': str(e),
             'files': [],
             'totalCount': 0
         }), 500
+
 
 @firebase_files_bp.route('/processed/', methods=['GET'])
 def list_processed_files():
