@@ -1265,22 +1265,51 @@ def detect_column_type(series):
         if len(non_null) == 0:
             return 'string'
         
-        # Check for boolean
+        # Check for boolean first
         unique_values = set(non_null.astype(str).str.lower())
         boolean_values = {'true', 'false', '1', '0', 'yes', 'no'}
         if unique_values.issubset(boolean_values):
             return 'boolean'
         
-        # Check for numeric
+        # Check for date patterns BEFORE checking numeric
+        # This handles cases where dates are stored as integers (e.g., 20231201)
+        try:
+            # Convert to string for pattern matching
+            str_series = non_null.astype(str)
+            
+            # Check for common date patterns
+            import re
+            date_patterns = [
+                r'^\d{4}-\d{2}-\d{2}$',  # YYYY-MM-DD
+                r'^\d{2}/\d{2}/\d{4}$',  # MM/DD/YYYY or DD/MM/YYYY
+                r'^\d{4}/\d{2}/\d{2}$',  # YYYY/MM/DD
+                r'^\d{2}-\d{2}-\d{4}$',  # MM-DD-YYYY or DD-MM-YYYY
+                r'^\d{4}\d{2}\d{2}$',    # YYYYMMDD
+                r'^\d{2}\.\d{2}\.\d{4}$', # DD.MM.YYYY or MM.DD.YYYY
+                r'^\d{4}\.\d{2}\.\d{2}$', # YYYY.MM.DD
+            ]
+            
+            # Check if most values match date patterns
+            date_matches = sum(1 for val in str_series if any(re.match(pattern, val) for pattern in date_patterns))
+            
+            # If more than 70% of values match date patterns, treat as date
+            if date_matches > len(str_series) * 0.7:
+                # Try to parse as datetime to confirm
+                pd.to_datetime(non_null, errors='raise')
+                return 'date'
+        except (ValueError, TypeError):
+            pass
+        
+        # Check for numeric types
         try:
             if all(non_null.astype(float).apply(lambda x: x.is_integer())):
                 return 'integer'
             pd.to_numeric(non_null)
             return 'float'
         except:
-            # Check for date
+            # If numeric conversion fails, try date parsing as fallback
             try:
-                pd.to_datetime(non_null)
+                pd.to_datetime(non_null, errors='raise')
                 return 'date'
             except:
                 return 'string'

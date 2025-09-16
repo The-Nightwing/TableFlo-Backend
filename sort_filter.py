@@ -508,22 +508,51 @@ def preview_combined_data():
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 def get_column_type(series):
-    """Helper function to determine column type"""
-    dtype_str = str(series.dtype)
-    if dtype_str.startswith('int'):
-        return 'integer'
-    elif dtype_str.startswith('float'):
-        return 'float'
-    elif dtype_str.startswith('datetime'):
-        return 'datetime'
-    elif dtype_str.startswith('bool'):
-        return 'boolean'
-    else:
-        try:
-            pd.to_datetime(series.dropna().iloc[0])
-            return 'datetime'
-        except (ValueError, IndexError):
+    """Helper function to determine column type (standardizing on 'date')."""
+    try:
+        non_null = series.dropna()
+        if len(non_null) == 0:
             return 'string'
+        
+        # Booleans
+        dtype_str = str(series.dtype)
+        if dtype_str.startswith('bool'):
+            return 'boolean'
+        
+        # Date detection before numeric
+        try:
+            str_series = non_null.astype(str)
+            import re
+            date_patterns = [
+                r'^\d{4}-\d{2}-\d{2}$',
+                r'^\d{2}/\d{2}/\d{4}$',
+                r'^\d{4}/\d{2}/\d{2}$',
+                r'^\d{2}-\d{2}-\d{4}$',
+                r'^\d{4}\d{2}\d{2}$',
+                r'^\d{2}\.\d{2}\.\d{4}$',
+                r'^\d{4}\.\d{2}\.\d{2}$',
+            ]
+            date_matches = sum(1 for val in str_series if any(re.match(p, val) for p in date_patterns))
+            if date_matches > len(str_series) * 0.7:
+                pd.to_datetime(non_null, errors='raise')
+                return 'date'
+        except Exception:
+            pass
+        
+        # Numeric types
+        if dtype_str.startswith('int'):
+            return 'integer'
+        if dtype_str.startswith('float'):
+            return 'float'
+        
+        # Fallbacks
+        try:
+            pd.to_datetime(non_null, errors='raise')
+            return 'date'
+        except Exception:
+            return 'string'
+    except Exception:
+        return 'string'
 
 def apply_filter(df, column, operator, value):
     """Apply filter operation to DataFrame."""

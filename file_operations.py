@@ -193,7 +193,7 @@ def apply_rename_operation(df, columns_config):
     return df.rename(columns=rename_map)
 
 def get_column_type(series):
-    """Determine the type of a pandas Series, defaulting to string if not easily determined."""
+    """Determine the type of a pandas Series, prioritizing date detection and returning 'date'."""
     try:
         # If it's not a Series, try to convert it
         if not isinstance(series, pd.Series):
@@ -212,25 +212,40 @@ def get_column_type(series):
         if unique_values.issubset(boolean_values):
             return 'boolean'
         
+        # Check for date patterns BEFORE numeric (handles YYYYMMDD too)
+        try:
+            str_series = non_null.astype(str)
+            import re
+            date_patterns = [
+                r'^\d{4}-\d{2}-\d{2}$',
+                r'^\d{2}/\d{2}/\d{4}$',
+                r'^\d{4}/\d{2}/\d{2}$',
+                r'^\d{2}-\d{2}-\d{4}$',
+                r'^\d{4}\d{2}\d{2}$',
+                r'^\d{2}\.\d{2}\.\d{4}$',
+                r'^\d{4}\.\d{2}\.\d{2}$',
+            ]
+            date_matches = sum(1 for val in str_series if any(re.match(p, val) for p in date_patterns))
+            if date_matches > len(str_series) * 0.7:
+                pd.to_datetime(non_null, errors='raise')
+                return 'date'
+        except (ValueError, TypeError):
+            pass
+        
         # Check for numeric
         try:
-            # First try to convert to numeric
             numeric_series = pd.to_numeric(non_null)
-            
-            # Check if all values are integers
             if all(numeric_series.apply(lambda x: float(x).is_integer())):
                 return 'integer'
             else:
                 return 'float'
         except (ValueError, TypeError):
-            pass
-        
-        # Check for date
-        try:
-            pd.to_datetime(non_null)
-            return 'date'
-        except (ValueError, TypeError):
-            pass
+            # Fallback date parsing
+            try:
+                pd.to_datetime(non_null, errors='raise')
+                return 'date'
+            except (ValueError, TypeError):
+                return 'string'
         
         # Default to string for everything else
         return 'string'
