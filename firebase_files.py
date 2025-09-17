@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from firebase_config import get_storage_bucket
 from firebase_admin import auth
 from models import File, db
+from models import User
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 firebase_files_bp = Blueprint('firebase_files', __name__, url_prefix='/api/list-files/')
