@@ -339,28 +339,50 @@ class DataFrame(db.Model):
             metadata: Optional dictionary containing additional metadata
         """
         def get_column_type(series):
-            """Helper function to determine column type"""
+            """Determine the type of a pandas Series, standardizing on 'date'."""
+            if isinstance(series, pd.DataFrame):
+                series = series.iloc[:, 0]
+            if not isinstance(series, pd.Series):
+                series = pd.Series(series)
+
+            non_null = series.dropna()
+            if len(non_null) == 0:
+                return 'string'
+            
+            # Boolean
             dtype_str = str(series.dtype)
+            if dtype_str.startswith('bool'):
+                return 'boolean'
+            
+            # Date detection before numeric
+            try:
+                str_series = non_null.astype(str)
+                import re
+                date_patterns = [
+                    r'^\d{4}-\d{2}-\d{2}$',
+                    r'^\d{2}/\d{2}/\d{4}$',
+                    r'^\d{4}/\d{2}/\d{2}$',
+                    r'^\d{2}-\d{2}-\d{4}$',
+                    r'^\d{4}\d{2}\d{2}$',
+                    r'^\d{2}\.\d{2}\.\d{4}$',
+                    r'^\d{4}\.\d{2}\.\d{2}$',
+                ]
+                date_matches = sum(1 for val in str_series if any(re.match(p, val) for p in date_patterns))
+                if date_matches > len(str_series) * 0.7:
+                    pd.to_datetime(non_null, errors='raise')
+                    return 'date'
+            except Exception:
+                pass
+            
             if dtype_str.startswith('int'):
                 return 'integer'
-            elif dtype_str.startswith('float'):
+            if dtype_str.startswith('float'):
                 return 'float'
-            elif dtype_str.startswith('datetime'):
-                return 'datetime'
-            elif dtype_str.startswith('bool'):
-                return 'boolean'
-            elif dtype_str.startswith('object'):
-                # Try to convert the whole series to datetime
-                try:
-                    converted = pd.to_datetime(series, errors='coerce')
-                    non_null = series.dropna()
-                    valid_dates = converted.dropna()
-                    if len(valid_dates) >= 0.5 * len(non_null):
-                        return 'datetime'
-                except Exception:
-                    pass
-                return 'string'
-            else:
+            
+            try:
+                pd.to_datetime(non_null, errors='raise')
+                return 'date'
+            except Exception:
                 return 'string'
 
         # Convert pandas Series to basic Python types
@@ -772,4 +794,3 @@ class AIRequest(db.Model):
             'response': self.response,
             'errorMessage': self.error_message
         }
-

@@ -508,47 +508,54 @@ def preview_combined_data():
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 def get_column_type(series):
-    """Helper function to determine column type"""
-    dtype_str = str(series.dtype)
-    if dtype_str.startswith('int'):
-        return 'integer'
-    elif dtype_str.startswith('float'):
-        return 'float'
-    elif dtype_str.startswith('datetime'):
-        return 'datetime'
-    elif dtype_str.startswith('bool'):
-        return 'boolean'
-    elif dtype_str.startswith('object'):
-        # Try to convert the whole series to datetime
+    """Helper function to determine column type (standardizing on 'date')."""
+    try:
+        non_null = series.dropna()
+        if len(non_null) == 0:
+            return 'string'
+        
+        # Booleans
+        dtype_str = str(series.dtype)
+        if dtype_str.startswith('bool'):
+            return 'boolean'
+        
+        # Date detection before numeric
         try:
-            converted = pd.to_datetime(series, errors='coerce')
-            non_null = series.dropna()
-            valid_dates = converted.dropna()
-            if len(valid_dates) >= 0.5 * len(non_null):
-                return 'datetime'
+            str_series = non_null.astype(str)
+            import re
+            date_patterns = [
+                r'^\d{4}-\d{2}-\d{2}$',
+                r'^\d{2}/\d{2}/\d{4}$',
+                r'^\d{4}/\d{2}/\d{2}$',
+                r'^\d{2}-\d{2}-\d{4}$',
+                r'^\d{4}\d{2}\d{2}$',
+                r'^\d{2}\.\d{2}\.\d{4}$',
+                r'^\d{4}\.\d{2}\.\d{2}$',
+            ]
+            date_matches = sum(1 for val in str_series if any(re.match(p, val) for p in date_patterns))
+            if date_matches > len(str_series) * 0.7:
+                pd.to_datetime(non_null, errors='raise')
+                return 'date'
         except Exception:
             pass
-        return 'string'
-    else:
+        
+        # Numeric types
+        if dtype_str.startswith('int'):
+            return 'integer'
+        if dtype_str.startswith('float'):
+            return 'float'
+        
+        # Fallbacks
+        try:
+            pd.to_datetime(non_null, errors='raise')
+            return 'date'
+        except Exception:
+            return 'string'
+    except Exception:
         return 'string'
 
 def apply_filter(df, column, operator, value):
     """Apply filter operation to DataFrame."""
-
-    if pd.api.types.is_numeric_dtype(df[column]):
-        if df[column].dtype == 'int64' or df[column].dtype == 'int32':
-            value = int(value)
-        elif df[column].dtype == 'float64' or df[column].dtype == 'float32':
-            value = float(value)
-    elif pd.api.types.is_datetime64_any_dtype(df[column]):
-        value = pd.to_datetime(value)  # Convert to datetime for datetime columns
-    elif pd.api.types.is_categorical_dtype(df[column]):
-        value = str(value)  # Convert to string for categorical columns
-    elif pd.api.types.is_bool_dtype(df[column]):
-        value = bool(value)  # Convert to boolean for boolean columns
-    else:
-        value = str(value)  # Default to string for other types
-
     if operator == "equals":
         col = df[column]
         # Numeric

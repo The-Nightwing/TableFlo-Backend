@@ -54,7 +54,7 @@ def infer_date_format(series):
         ('%Y/%m/%d', 'YYYY/MM/DD'),
         ('%d-%m-%Y', 'DD-MM-YYYY'),
         ('%m-%d-%Y', 'MM-DD-YYYY'),
-        ('%Y%m%d', 'YYYYMMDD'),
+        ('%Y%m%d', 'YYYYMMDD'),  # Integer format like 20231201
         ('%d.%m.%Y', 'DD.MM.YYYY'),
         ('%Y.%m.%d', 'YYYY.MM.DD')
     ]
@@ -96,6 +96,18 @@ def parse_and_format_dates(series, format=None):
         # Handle year-only values
         if val.isdigit() and len(val) == 4:
             return f"{val}-01-01"
+        
+        # Handle YYYYMMDD format (common integer date format)
+        if val.isdigit() and len(val) == 8:
+            try:
+                year = val[:4]
+                month = val[4:6]
+                day = val[6:8]
+                # Validate the date components
+                if 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
+                    return f"{year}-{month}-{day}"
+            except (ValueError, IndexError):
+                pass
         
         # Handle year-month values
         if len(val.split('-')) == 2:

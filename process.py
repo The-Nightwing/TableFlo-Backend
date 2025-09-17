@@ -1900,6 +1900,16 @@ def delete_process(process_id):
         except Exception as storage_error:
             print(f"Warning: Error cleaning up storage for process {process_id}: {str(storage_error)}")
 
+        # Proactively delete dependent records to satisfy FK constraints
+        try:
+            # Delete DataFrameOperation records for this process first
+            df_ops = DataFrameOperation.query.filter_by(process_id=process.id).all()
+            for op in df_ops:
+                db.session.delete(op)
+            db.session.flush()
+        except Exception as e:
+            print(f"Warning: Failed deleting DataFrameOperations for process {process_id}: {str(e)}")
+
         # Delete the process and all associated data
         db.session.delete(process)
         db.session.commit()

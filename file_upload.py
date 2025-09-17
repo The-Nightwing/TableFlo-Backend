@@ -174,36 +174,54 @@ def extract_metadata(file_content, file_type):
     metadata = {}
 
     def detect_column_type(series):
-        """Helper function to detect column type including boolean"""
+        """Helper function to detect column type including boolean and date"""
         try:
             non_null = series.dropna()
             if len(non_null) == 0:
                 return 'string'
             
-            # Check for boolean
+            # Check for boolean first
             unique_values = set(non_null.astype(str).str.lower())
             boolean_values = {'true', 'false', '1', '0', 'yes', 'no'}
             if unique_values.issubset(boolean_values):
                 return 'boolean'
             
+            # Check for date patterns BEFORE checking numeric
+            # This handles cases where dates are stored as integers (e.g., 20231201)
+            try:
+                str_series = non_null.astype(str)
+                import re
+                date_patterns = [
+                    r'^\d{4}-\d{2}-\d{2}$',  # YYYY-MM-DD
+                    r'^\d{2}/\d{2}/\d{4}$',  # MM/DD/YYYY or DD/MM/YYYY
+                    r'^\d{4}/\d{2}/\d{2}$',  # YYYY/MM/DD
+                    r'^\d{2}-\d{2}-\d{4}$',  # MM-DD-YYYY or DD-MM-YYYY
+                    r'^\d{4}\d{2}\d{2}$',    # YYYYMMDD
+                    r'^\d{2}\.\d{2}\.\d{4}$', # DD.MM.YYYY or MM.DD.YYYY
+                    r'^\d{4}\.\d{2}\.\d{2}$', # YYYY.MM.DD
+                ]
+                date_matches = sum(1 for val in str_series if any(re.match(pattern, val) for pattern in date_patterns))
+                if date_matches > len(str_series) * 0.7:
+                    pd.to_datetime(non_null, errors='raise')
+                    return 'date'
+            except (ValueError, TypeError):
+                pass
+            
             # Check for numeric
             try:
-                # First try to convert to numeric
                 numeric_series = pd.to_numeric(non_null)
-                
-                # Check if all values are integers
                 if all(numeric_series.apply(lambda x: float(x).is_integer())):
                     return 'integer'
                 else:
                     return 'float'
             except (ValueError, TypeError):
-                # If numeric conversion fails, check for date
+                # If numeric conversion fails, try date parsing as fallback
                 try:
-                    pd.to_datetime(non_null)
+                    pd.to_datetime(non_null, errors='raise')
                     return 'date'
                 except (ValueError, TypeError):
                     return 'string'
-        except:
+        except Exception:
             return 'string'
 
     if file_type == 'Excel':
@@ -673,19 +691,48 @@ def store_dataframe_from_file(email, process_id, table_name, file_id, sheet_name
         storage_path = f"{df_path}.csv"
 
         def detect_column_type(series):
-            """Helper function to detect column type including boolean"""
+            """Helper function to detect column type including boolean and date"""
             try:
                 non_null = series.dropna()
                 if len(non_null) == 0:
                     return 'string'
                 
-                # Check for boolean
+                # Check for boolean first
                 unique_values = set(non_null.astype(str).str.lower())
                 boolean_values = {'true', 'false', '1', '0', 'yes', 'no'}
                 if unique_values.issubset(boolean_values):
                     return 'boolean'
                 
-                # Check for numeric
+                # Check for date patterns BEFORE checking numeric
+                # This handles cases where dates are stored as integers (e.g., 20231201)
+                try:
+                    # Convert to string for pattern matching
+                    str_series = non_null.astype(str)
+                    
+                    # Check for common date patterns
+                    date_patterns = [
+                        r'^\d{4}-\d{2}-\d{2}$',  # YYYY-MM-DD
+                        r'^\d{2}/\d{2}/\d{4}$',  # MM/DD/YYYY or DD/MM/YYYY
+                        r'^\d{4}/\d{2}/\d{2}$',  # YYYY/MM/DD
+                        r'^\d{2}-\d{2}-\d{4}$',  # MM-DD-YYYY or DD-MM-YYYY
+                        r'^\d{4}\d{2}\d{2}$',    # YYYYMMDD
+                        r'^\d{2}\.\d{2}\.\d{4}$', # DD.MM.YYYY or MM.DD.YYYY
+                        r'^\d{4}\.\d{2}\.\d{2}$', # YYYY.MM.DD
+                    ]
+                    
+                    # Check if most values match date patterns
+                    import re
+                    date_matches = sum(1 for val in str_series if any(re.match(pattern, val) for pattern in date_patterns))
+                    
+                    # If more than 70% of values match date patterns, treat as date
+                    if date_matches > len(str_series) * 0.7:
+                        # Try to parse as datetime to confirm
+                        pd.to_datetime(non_null, errors='raise')
+                        return 'date'
+                except (ValueError, TypeError):
+                    pass
+                
+                # Check for numeric types
                 try:
                     # First try to convert to numeric
                     numeric_series = pd.to_numeric(non_null)
@@ -696,9 +743,9 @@ def store_dataframe_from_file(email, process_id, table_name, file_id, sheet_name
                     else:
                         return 'float'
                 except (ValueError, TypeError):
-                    # If numeric conversion fails, check for date
+                    # If numeric conversion fails, try date parsing as fallback
                     try:
-                        pd.to_datetime(non_null)
+                        pd.to_datetime(non_null, errors='raise')
                         return 'date'
                     except (ValueError, TypeError):
                         return 'string'

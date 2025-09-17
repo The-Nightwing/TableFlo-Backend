@@ -275,28 +275,47 @@ def preview_formatting():
         return jsonify({"success": False, "error": str(e)}), 500
 
 def get_column_type(series):
-    """Helper function to determine column type"""
-    dtype_str = str(series.dtype)
-    if dtype_str.startswith('int'):
-        return 'integer'
-    elif dtype_str.startswith('float'):
-        return 'float'
-    elif dtype_str.startswith('datetime'):
-        return 'datetime'
-    elif dtype_str.startswith('bool'):
-        return 'boolean'
-    elif dtype_str.startswith('object'):
-        # Try to convert the whole series to datetime
+    """Helper function to get column type, prioritizing 'date' detection."""
+    try:
+        non_null = series.dropna()
+        if len(non_null) == 0:
+            return 'string'
+        
+        dtype_str = str(series.dtype)
+        if dtype_str.startswith('bool'):
+            return 'boolean'
+        
+        # Detect dates before numeric (supports YYYYMMDD)
         try:
-            converted = pd.to_datetime(series, errors='coerce')
-            non_null = series.dropna()
-            valid_dates = converted.dropna()
-            if len(valid_dates) >= 0.5 * len(non_null):
-                return 'datetime'
+            str_series = non_null.astype(str)
+            import re
+            date_patterns = [
+                r'^\d{4}-\d{2}-\d{2}$',
+                r'^\d{2}/\d{2}/\d{4}$',
+                r'^\d{4}/\d{2}/\d{2}$',
+                r'^\d{2}-\d{2}-\d{4}$',
+                r'^\d{4}\d{2}\d{2}$',
+                r'^\d{2}\.\d{2}\.\d{4}$',
+                r'^\d{4}\.\d{2}\.\d{2}$',
+            ]
+            date_matches = sum(1 for val in str_series if any(re.match(p, val) for p in date_patterns))
+            if date_matches > len(str_series) * 0.7:
+                pd.to_datetime(non_null, errors='raise')
+                return 'date'
         except Exception:
             pass
-        return 'string'
-    else:
+        
+        if dtype_str.startswith('int'):
+            return 'integer'
+        if dtype_str.startswith('float'):
+            return 'float'
+        
+        try:
+            pd.to_datetime(non_null, errors='raise')
+            return 'date'
+        except Exception:
+            return 'string'
+    except Exception:
         return 'string'
 
 def apply_format_to_range(ws, range_item, format_type, format_details):
