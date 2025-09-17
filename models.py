@@ -794,4 +794,3 @@ class AIRequest(db.Model):
             'response': self.response,
             'errorMessage': self.error_message
         }
-
