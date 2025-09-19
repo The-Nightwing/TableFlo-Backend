@@ -1195,10 +1195,11 @@ def include_formatting_step():
         try:
             db.session.add(formatting_step)
             db.session.commit()
-
+            formatting_dict = formatting_step.to_dict()
+            formattingDescription = formatting_dict['configuration']['message']
             return jsonify({
                 "success": True,
-                "message": "Formatting step included in process execution",
+                "description": formattingDescription,
                 "formattingStep": formatting_step.to_dict()
             })
 
