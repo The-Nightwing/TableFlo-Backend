@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from models import User, UserProcess, ProcessOperation, ProcessFileKey, DataFrame, db, DataFrameOperation, DataFrameBatchOperation
+from models import User, UserProcess, ProcessOperation, ProcessFileKey, DataFrame, db, DataFrameOperation, DataFrameBatchOperation, FormattingStep
 from firebase_config import get_storage_bucket
 import json
 from datetime import datetime
@@ -1047,9 +1047,9 @@ def list_process_dataframes(process_id):
         dataframes = DataFrame.query.filter_by(process_id=process_id).all()
         
         bucket = get_storage_bucket()
-        dataframe_list = []
-
-        for df in dataframes:
+        
+        def process_dataframe(df):
+            """Process a single DataFrame to get its metadata and download URL"""
             try:
                 # Initialize metadata content with basic DataFrame info
                 metadata_content = {
@@ -1080,7 +1080,7 @@ def list_process_dataframes(process_id):
                         version='v4'
                     )
 
-                dataframe_info = {
+                return {
                     "id": df.id,
                     "name": df.name,
                     "processId": df.process_id,
@@ -1095,12 +1095,23 @@ def list_process_dataframes(process_id):
                     "originalSheetName": metadata_content.get("originalSheetName"),
                     "columns": metadata_content.get("columns", [])
                 }
-                dataframe_list.append(dataframe_info)
-
             except Exception as e:
                 print(f"Error processing DataFrame {df.id}: {str(e)}")
-                # Continue with next DataFrame instead of failing completely
-                continue
+                return None
+
+        # Use ThreadPoolExecutor to process DataFrames in parallel
+        from concurrent.futures import ThreadPoolExecutor
+        dataframe_list = []
+        
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            # Submit all DataFrame processing tasks
+            future_to_df = {executor.submit(process_dataframe, df): df for df in dataframes}
+            
+            # Collect results as they complete
+            for future in future_to_df:
+                result = future.result()
+                if result is not None:
+                    dataframe_list.append(result)
 
         return jsonify({
             "success": True,
@@ -1890,29 +1901,62 @@ def delete_process(process_id):
             "operationCount": len(process.operations)
         }
 
+        # Start cleanup operations in parallel
+        import threading
+        import time
+        
+        storage_cleanup_done = threading.Event()
+        storage_error = None
+        
+        def cleanup_storage():
+            nonlocal storage_error
+            try:
+                bucket = get_storage_bucket()
+                base_path = f"{email}/process/{process.id}"
+                blobs = list(bucket.list_blobs(prefix=base_path))
+                
+                # Delete blobs in batches for better performance
+                batch_size = 50
+                for i in range(0, len(blobs), batch_size):
+                    batch = blobs[i:i + batch_size]
+                    for blob in batch:
+                        try:
+                            blob.delete()
+                        except Exception as e:
+                            print(f"Warning: Failed to delete blob {blob.name}: {str(e)}")
+            except Exception as e:
+                storage_error = str(e)
+                print(f"Warning: Error cleaning up storage for process {process_id}: {str(e)}")
+            finally:
+                storage_cleanup_done.set()
+        
+        # Start storage cleanup in background
+        storage_thread = threading.Thread(target=cleanup_storage)
+        storage_thread.start()
+        
+        # Optimize database cleanup with bulk operations
         try:
-            # Delete associated files from Firebase Storage
-            bucket = get_storage_bucket()
-            base_path = f"{email}/process/{process.id}"
-            blobs = bucket.list_blobs(prefix=base_path)
-            for blob in blobs:
-                blob.delete()
-        except Exception as storage_error:
-            print(f"Warning: Error cleaning up storage for process {process_id}: {str(storage_error)}")
-
-        # Proactively delete dependent records to satisfy FK constraints
-        try:
-            # Delete DataFrameOperation records for this process first
-            df_ops = DataFrameOperation.query.filter_by(process_id=process.id).all()
-            for op in df_ops:
-                db.session.delete(op)
-            db.session.flush()
+            # Use bulk delete for better performance
+            DataFrameOperation.query.filter_by(process_id=process.id).delete(synchronize_session=False)
+            DataFrameBatchOperation.query.filter_by(process_id=process.id).delete(synchronize_session=False)
+            FormattingStep.query.filter_by(process_id=process.id).delete(synchronize_session=False)
+            
+            # Delete the process (cascade will handle remaining children)
+            db.session.delete(process)
+            db.session.commit()
+            
         except Exception as e:
-            print(f"Warning: Failed deleting DataFrameOperations for process {process_id}: {str(e)}")
-
-        # Delete the process and all associated data
-        db.session.delete(process)
-        db.session.commit()
+            db.session.rollback()
+            print(f"Error in database cleanup: {str(e)}")
+            raise e
+        
+        # Wait for storage cleanup to complete (with timeout)
+        storage_cleanup_done.wait(timeout=30)  # 30 second timeout
+        if not storage_cleanup_done.is_set():
+            print(f"Warning: Storage cleanup timed out for process {process_id}")
+        
+        if storage_error:
+            print(f"Warning: Storage cleanup had errors: {storage_error}")
 
         return jsonify({
             "success": True,
@@ -1923,6 +1967,75 @@ def delete_process(process_id):
     except Exception as e:
         db.session.rollback()
         print(f"Error in delete_process: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@process_bp.route('/<process_id>/delete-async', methods=['POST'])
+def delete_process_async(process_id):
+    """Delete a process asynchronously for very large processes."""
+    try:
+        email = request.headers.get("X-User-Email")
+        if not email:
+            return jsonify({"error": "Email is required"}), 400
+
+        # Get user and verify ownership
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Get process and verify ownership
+        process = UserProcess.query.filter_by(id=process_id, user_id=user.id).first()
+        if not process:
+            return jsonify({"error": "Process not found or access denied"}), 404
+
+        # Start async deletion in background
+        import threading
+        def async_delete():
+            try:
+                # Mark process as being deleted
+                process.is_active = False
+                db.session.commit()
+                
+                # Perform cleanup
+                bucket = get_storage_bucket()
+                base_path = f"{email}/process/{process.id}"
+                blobs = list(bucket.list_blobs(prefix=base_path))
+                
+                # Delete in smaller batches with delays
+                batch_size = 20
+                for i in range(0, len(blobs), batch_size):
+                    batch = blobs[i:i + batch_size]
+                    for blob in batch:
+                        try:
+                            blob.delete()
+                        except Exception as e:
+                            print(f"Warning: Failed to delete blob {blob.name}: {str(e)}")
+                    time.sleep(0.1)  # Small delay between batches
+                
+                # Clean up database
+                DataFrameOperation.query.filter_by(process_id=process.id).delete(synchronize_session=False)
+                DataFrameBatchOperation.query.filter_by(process_id=process.id).delete(synchronize_session=False)
+                FormattingStep.query.filter_by(process_id=process.id).delete(synchronize_session=False)
+                db.session.delete(process)
+                db.session.commit()
+                
+                print(f"Async deletion completed for process {process_id}")
+            except Exception as e:
+                print(f"Error in async deletion for process {process_id}: {str(e)}")
+                db.session.rollback()
+        
+        # Start background thread
+        thread = threading.Thread(target=async_delete)
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            "success": True,
+            "message": "Process deletion started in background",
+            "processId": process_id
+        })
+
+    except Exception as e:
+        print(f"Error starting async delete: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @process_bp.route('/<process_id>/operations/<operation_id>', methods=['GET'])
