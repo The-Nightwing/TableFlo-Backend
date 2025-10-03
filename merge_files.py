@@ -321,7 +321,7 @@ def process_merge_tables(email, process_id, table1, table2, merge_type, merge_me
                 # Get the final column order: original df1 + new (non-key) columns from df2
                 left_columns = list(df1.columns)
                 # Exclude right keys and also avoid duplicates
-                right_new_columns = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                right_new_columns = [col for col in df2.columns if col not in df1.columns]
                 final_column_order = left_columns + right_new_columns
 
                 # Filter merged_df to keep only those columns, if they exist in the result
