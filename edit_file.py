@@ -374,8 +374,6 @@ def process_columns_and_types(email, process_id, table_name, column_selections=N
         if not selected_columns:
             raise ValueError("No columns selected for processing")
             
-        
-        
         # Infer data types if not provided
         inferred_types = {}
         for column in df.columns:
@@ -747,3 +745,141 @@ def get_process_table_data(email, process_name, table_name, page=1, per_page=100
     except Exception as e:
         raise Exception(f"Error fetching table data: {str(e)}")
 
+@edit_file_bp.route('/save_table_edit', methods=['POST'])
+def save_table_edit():
+    """
+    Save or update a draft copy of a single table edit.
+    Applies column selections, types, and datetime formats.
+    Overwrites the existing draft if already present.
+    """
+    try:
+        data = request.json
+        email = request.headers.get("X-User-Email")
+
+        if not email:
+            return jsonify({"error": "Email is required"}), 400
+
+        process_id = data.get("processId")
+        table_name = data.get("tableName")
+        column_selections = data.get("columnSelections")
+        column_types = data.get("columnTypes")
+        datetime_formats = data.get("datetimeFormats")
+
+        if not process_id or not table_name:
+            return jsonify({"error": "processId and tableName are required"}), 400
+
+        # Verify user + process
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        process = UserProcess.query.filter_by(id=process_id, user_id=user.id).first()
+        if not process:
+            return jsonify({"error": "Process not found or access denied"}), 404
+
+        # Process table edits
+        result = process_columns_and_types(
+            email=email,
+            process_id=process_id,
+            table_name=table_name,
+            column_selections=column_selections,
+            column_types=column_types,
+            datetime_formats=datetime_formats
+        )
+
+        if not result.get("success"):
+            return jsonify({"success": False, "error": result.get("error")}), 400
+
+        # Check for existing draft
+        draft = DataFrame.query.filter_by(
+            process_id=process_id,
+            name=table_name,
+            is_draft=True
+        ).first()
+
+        if draft:
+            # Overwrite draft with processed result
+            draft.data_metadata = result["metadata"]
+            draft.storage_path = f"{email}/process/{process_id}/dataframes/{table_name}.csv"
+            draft.row_count = result["rowCount"]
+            draft.column_count = result["columnCount"]
+            draft.updated_at = datetime.utcnow()
+        else:
+            # Create new draft
+            draft = DataFrame(
+                process_id=process_id,
+                name=table_name,
+                email=email,
+                row_count=result["rowCount"],
+                column_count=result["columnCount"],
+                storage_path=f"{email}/process/{process_id}/dataframes/{table_name}.csv",
+                user_id=user.id,
+                data_metadata=result["metadata"],
+                is_originally_uploaded=False
+            )
+            draft.is_draft = True
+            db.session.add(draft)
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Draft saved for table {table_name}",
+            "draftId": draft.id,
+            "metadata": result["metadata"],
+            "rowCount": draft.row_count,
+            "columnCount": draft.column_count
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+   
+@edit_file_bp.route('/<process_id>/reset_edits', methods=['POST'])
+def reset_table_edits(process_id):
+    """
+    Discard all draft edits for a process and restore last finalized DataFrames.
+    This deletes drafts and keeps only original + last finalized copies.
+    """
+    try:
+        email = request.headers.get("X-User-Email")
+        if not email:
+            return jsonify({"error": "Email is required"}), 400
+
+        # Validate user & process
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        process = UserProcess.query.filter_by(id=process_id, user_id=user.id).first()
+        if not process:
+            return jsonify({"error": "Process not found or access denied"}), 404
+
+        # Find all draft DataFrames
+        drafts = DataFrame.query.filter_by(
+            process_id=process_id,
+            is_originally_uploaded = False,
+            is_draft=True
+        ).all()
+
+        if not drafts:
+            return jsonify({"success": True, "message": "No drafts to reset"}), 200
+
+        draft_names = [d.name for d in drafts]
+
+        # Delete drafts only
+        for draft in drafts:
+            db.session.delete(draft)
+
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Edits reset. Discarded drafts for tables: {', '.join(draft_names)}",
+            "discardedTables": draft_names
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500

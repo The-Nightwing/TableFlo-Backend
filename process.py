@@ -1044,7 +1044,7 @@ def list_process_dataframes(process_id):
             return jsonify({"error": "Process not found or access denied"}), 404
 
         # Get all DataFrames for this process
-        dataframes = DataFrame.query.filter_by(process_id=process_id).all()
+        dataframes = DataFrame.query.filter_by(process_id=process_id, is_draft=False).all()
         
         bucket = get_storage_bucket()
         
@@ -2260,9 +2260,9 @@ def manage_process_operations(process_id):
         operation_type = data.get('operationType')
 
         allDataframes = DataFrame.query.filter_by(
-                process_id=process_id,
-                is_active=True,
-                is_originally_uploaded=True).all()
+            process_id=process_id,
+            is_active=True,
+            is_originally_uploaded=True).all()
         
         tableNames = []
         fileNames = []
@@ -2324,7 +2324,7 @@ def manage_process_operations(process_id):
             process_operation = ProcessOperation(
                 process_id=process_id,
                 title = deleted_operation_info.get('title') or operation_title,
-                description = description or '',
+                description = deleted_operation_info.get('description') or '',
                 sequence=float(data['sequence']),
                 operation_name=df_operation.operation_type,
                 parameters=df_operation.payload,
@@ -2380,3 +2380,426 @@ def manage_process_operations(process_id):
         db.session.rollback()
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
+@process_bp.route('/<process_id>/operations/replace', methods=['POST'])
+def manage_process_operations(process_id):
+    """
+    Combined endpoint: Add a new operation and optionally delete an existing one in a process.
+    Request can include:
+        - 'dataframeOperationId', 'sequence', 'operationType' (required for add)
+        - 'operationToDeleteId' (optional - to delete before adding)
+    """
+    try:
+        data = request.json
+        email = request.headers.get("X-User-Email")
+        if not email:
+            return jsonify({"error": "Email is required"}), 400
+
+        # Authenticate user and check process ownership
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        process = UserProcess.query.filter_by(id=process_id, user_id=user.id).first()
+        if not process:
+            return jsonify({"error": "Process not found or access denied"}), 404
+
+        process.is_draft = True
+        process.updated_at = datetime.now()
+        db.session.add(process)
+
+        deleted_operation_info = None
+        operation_to_delete_id = data.get('operationToDeleteId')
+
+        # === Deletion part (optional) ===
+        if operation_to_delete_id:
+            operation = ProcessOperation.query.filter_by(
+                id=operation_to_delete_id,
+                process_id=process_id
+            ).first()
+            if not operation:
+                return jsonify({"error": "Operation to delete not found"}), 404
+
+            deleted_operation_info = {
+                "id": operation.id,
+                "sequence": float(operation.sequence),
+                "operationType": operation.operation_name,
+                "title": operation.title,
+                "description": operation.description
+            }
+
+            db.session.delete(operation)
+            db.session.commit()
+
+        # === Addition part ===
+        required_fields = ['dataframeOperationId', 'sequence']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+
+        operation_type = data.get('operationType')
+
+        allDataframes = DataFrame.query.filter_by(
+            process_id=process_id,
+            is_active=True,
+            is_originally_uploaded=True).all()
+        
+        tableNames = []
+        fileNames = []
+        for dataframe in allDataframes:
+            metadata = dataframe.data_metadata
+            tableNames.append(metadata.get('tableName'))
+            fileNames.append(metadata.get('originalFileName'))
+
+        description = f'Select files {", ".join(tableNames)} from files {", ".join(fileNames)}'
+
+        if operation_type == 'edit_file':
+            allDrafts = DataFrame.query.filter_by(
+                process_id=process_id,
+                is_originally_uploaded=False,
+                is_draft=True,
+            ).all()
+
+            tables_payload = []
+
+            for draft in allDrafts:
+                metadata = draft.data_metadata or {}
+                columns = metadata.get("columns", metadata.get("columnTypes", {}).keys())
+
+                column_selections = {col: True for col in columns}
+                column_types = {col: metadata.get("columnTypes", {}).get(col, "string") for col in columns}
+                datetime_formats = {col: "" for col in columns}
+
+                tables_payload.append({
+                    "tableName": draft.name,
+                    "columnSelections": column_selections,
+                    "columnTypes": column_types,
+                    "datetimeFormats": datetime_formats
+                })
+
+            payload = {
+                "processId": process_id,
+                "tables": tables_payload
+            }
+
+            process_operation = ProcessOperation(
+                process_id=process_id,
+                title = deleted_operation_info.get('title') or 'Define Inputs',
+                description = description or '',
+                sequence=float(data['sequence']),
+                operation_name='edit_file',
+                parameters={**payload, 'batchOperationId': None},
+                is_active=True
+            )
+        else:
+            df_operation = DataFrameOperation.query.get(data['dataframeOperationId'])
+            if not df_operation or df_operation.process_id != process_id:
+                return jsonify({"error": "DataFrameOperation not found or does not belong to this process"}), 404
+            
+            operation_title = None  # Default to provided title
+            if not operation_title:
+                if df_operation.operation_type == "add_column":
+                    subtype = df_operation.operation_subtype.lower()
+                    if "calcul" in subtype:
+                        operation_title = "Add Column – Calculate"
+                    elif "concat" in subtype:
+                        operation_title = "Add Column – Concatenate"
+                    elif "conditional" in subtype:
+                        operation_title = "Add Column – Conditional"
+                    elif "pattern" in subtype:
+                        operation_title = "Add Column – Pattern"
+                elif df_operation.operation_type == "merge_files":
+                    operation_title = "Merge"
+                elif df_operation.operation_type == "group_pivot":
+                    operation_title = "Pivot"
+                elif df_operation.operation_type == "sort_filter":
+                    payload_str = str(df_operation.payload).lower()
+                    if "sortconfig" in payload_str:
+                        operation_title = "Sort"
+                    elif "filterconfig" in payload_str:
+                        operation_title = "Filter"
+                elif df_operation.operation_type == "replace_rename_reorder":
+                    operation_title = "Replace Rename Reorder"
+                elif df_operation.operation_type == "reconcile_files":
+                    operation_title = "Reconcile"
+                elif df_operation.operation_type == "apply_formatting":
+                    operation_title = "Formatting"
+
+            process_operation = ProcessOperation(
+                process_id=process_id,
+                title = deleted_operation_info.get('title') or operation_title,
+                description = deleted_operation_info.get('description') or '',
+                sequence=float(data['sequence']),
+                operation_name=df_operation.operation_type,
+                parameters=df_operation.payload,
+                dataframe_operation_id=df_operation.id,
+                is_active=True
+            )
+
+        db.session.add(process_operation)
+        
+        # Commit both process update and new operation in one transaction
+        try:
+            db.session.commit()
+        except Exception as commit_error:
+            db.session.rollback()
+            print(f"Error committing changes: {str(commit_error)}")
+            raise commit_error
+
+        # Format response for the newly added operation
+        op_source = batch_operation if operation_type == 'edit_file' else df_operation
+        op_info = {
+            "id": process_operation.id,
+            "processId": process_id,
+            "sequence": process_operation.sequence,
+            "operationType": process_operation.operation_name,
+            "parameters": process_operation.parameters,
+            "isActive": process_operation.is_active,
+            "createdAt": process_operation.created_at.isoformat() if process_operation.created_at else None,
+            "updatedAt": process_operation.updated_at.isoformat() if process_operation.updated_at else None,
+            "dataframeOperation": {
+                "id": op_source.id,
+                "operationType": "edit_file" if operation_type == 'edit_file' else op_source.operation_type,
+                "operationSubtype": None if operation_type == 'edit_file' else op_source.operation_subtype,
+                "status": op_source.status,
+                "payload": op_source.payload,
+                "createdAt": op_source.created_at.isoformat() if op_source.created_at else None,
+                "updatedAt": op_source.updated_at.isoformat() if op_source.updated_at else None
+            }
+        }
+
+        return jsonify({
+            "success": True,
+            "message": "Operation added successfully" + (" and previous operation deleted" if operation_to_delete_id else ""),
+            "operation": op_info,
+            "deletedOperation": deleted_operation_info,
+            "process": {
+                "id": process.id,
+                "name": process.process_name,
+                "updatedAt": process.updated_at.isoformat()
+            }
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+@process_bp.route('/<process_id>/operations/replace1', methods=['POST'])
+def manage_process_operations1(process_id):
+    """
+    Combined endpoint: Add a new operation, optionally delete an existing one,
+    and finalize table drafts into the process.
+    """
+    try:
+        data = request.json
+        email = request.headers.get("X-User-Email")
+        if not email:
+            return jsonify({"error": "Email is required"}), 400
+
+        # Authenticate user and check process ownership
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        process = UserProcess.query.filter_by(id=process_id, user_id=user.id).first()
+        if not process:
+            return jsonify({"error": "Process not found or access denied"}), 404
+
+        process.is_draft = True  # process stays draft until manually finalized
+        process.updated_at = datetime.utcnow()
+        db.session.add(process)
+
+        deleted_operation_info = None
+        operation_to_delete_id = data.get('operationToDeleteId')
+
+        # === Optional deletion of previous operation ===
+        if operation_to_delete_id:
+            operation = ProcessOperation.query.filter_by(
+                id=operation_to_delete_id,
+                process_id=process_id
+            ).first()
+            if not operation:
+                return jsonify({"error": "Operation to delete not found"}), 404
+
+            deleted_operation_info = {
+                "id": operation.id,
+                "sequence": float(operation.sequence),
+                "operationType": operation.operation_name,
+                "title": operation.title,
+                "description": operation.description
+            }
+
+            db.session.delete(operation)
+            db.session.commit()
+
+        # === Validate required fields for adding a new operation ===
+        required_fields = ['dataframeOperationId', 'sequence']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+
+        operation_type = data.get('operationType')
+
+        # === Promote table drafts to finalized copies ===
+        table_drafts = DataFrame.query.filter_by(
+            process_id=process_id,
+            is_draft=True,
+            is_originally_uploaded=False
+        ).all()
+
+        finalized_table_ids = []
+
+        for draft in table_drafts:
+            # Check for existing finalized copy
+            finalized = DataFrame.query.filter_by(
+                process_id=process_id,
+                name=draft.name,
+                is_draft=False,
+                is_originally_uploaded=False
+            ).first()
+
+            if finalized:
+                # Overwrite finalized copy
+                finalized.row_count = draft.row_count
+                finalized.column_count = draft.column_count
+                finalized.data_metadata = draft.data_metadata
+                finalized.storage_path = draft.storage_path
+                finalized.updated_at = datetime.utcnow()
+                finalized_table_ids.append(finalized.id)
+            else:
+                # Promote draft to finalized
+                draft.is_draft = False
+                draft.updated_at = datetime.utcnow()
+                db.session.add(draft)
+                finalized_table_ids.append(draft.id)
+
+        # Delete all drafts after finalization
+        for draft in table_drafts:
+            if draft.is_draft:  # leftover drafts
+                db.session.delete(draft)
+
+        db.session.commit()  # commit all draft promotions before creating ProcessOperation
+
+        # === Add ProcessOperation ===
+        if operation_type == 'edit_file':
+            batch_operation = DataFrameBatchOperation.query.get(data['dataframeOperationId'])
+            if not batch_operation or batch_operation.process_id != process_id:
+                return jsonify({"error": "BatchOperation not found or does not belong to this process"}), 404
+
+            description = f'Select tables {", ".join([d.name for d in table_drafts])}'
+
+            process_operation = ProcessOperation(
+                process_id=process_id,
+                title = deleted_operation_info.get('title') or 'Define Inputs',
+                description = description or '',
+                sequence=float(data['sequence']),
+                operation_name='edit_file',
+                parameters={**batch_operation.payload, 'batchOperationId': batch_operation.id, 'finalizedTableIds': finalized_table_ids},
+                is_active=True
+            )
+        else:
+            df_operation = DataFrameOperation.query.get(data['dataframeOperationId'])
+            if not df_operation or df_operation.process_id != process_id:
+                return jsonify({"error": "DataFrameOperation not found or does not belong to this process"}), 404
+
+            # Build default title based on operation type/subtype
+            operation_title = None
+            if df_operation.operation_type == "add_column":
+                subtype = (df_operation.operation_subtype or "").lower()
+                if "calcul" in subtype:
+                    operation_title = "Add Column – Calculate"
+                elif "concat" in subtype:
+                    operation_title = "Add Column – Concatenate"
+                elif "conditional" in subtype:
+                    operation_title = "Add Column – Conditional"
+                elif "pattern" in subtype:
+                    operation_title = "Add Column – Pattern"
+            elif df_operation.operation_type == "merge_files":
+                operation_title = "Merge"
+            elif df_operation.operation_type == "group_pivot":
+                operation_title = "Pivot"
+            elif df_operation.operation_type == "sort_filter":
+                payload_str = str(df_operation.payload).lower()
+                if "sortconfig" in payload_str:
+                    operation_title = "Sort"
+                elif "filterconfig" in payload_str:
+                    operation_title = "Filter"
+            elif df_operation.operation_type == "replace_rename_reorder":
+                operation_title = "Replace Rename Reorder"
+            elif df_operation.operation_type == "reconcile_files":
+                operation_title = "Reconcile"
+            elif df_operation.operation_type == "apply_formatting":
+                operation_title = "Formatting"
+
+            process_operation = ProcessOperation(
+                process_id=process_id,
+                title = deleted_operation_info.get('title') or operation_title,
+                description = deleted_operation_info.get('description') or '',
+                sequence=float(data['sequence']),
+                operation_name=df_operation.operation_type,
+                parameters={**df_operation.payload, 'finalizedTableIds': finalized_table_ids},
+                dataframe_operation_id=df_operation.id,
+                is_active=True
+            )
+
+        db.session.add(process_operation)
+        db.session.commit()
+
+        # Prepare response
+        op_source = batch_operation if operation_type == 'edit_file' else df_operation
+        op_info = {
+            "id": process_operation.id,
+            "processId": process_id,
+            "sequence": process_operation.sequence,
+            "operationType": process_operation.operation_name,
+            "parameters": process_operation.parameters,
+            "isActive": process_operation.is_active,
+            "createdAt": process_operation.created_at.isoformat() if process_operation.created_at else None,
+            "updatedAt": process_operation.updated_at.isoformat() if process_operation.updated_at else None,
+            "dataframeOperation": {
+                "id": op_source.id,
+                "operationType": "edit_file" if operation_type == 'edit_file' else op_source.operation_type,
+                "operationSubtype": None if operation_type == 'edit_file' else op_source.operation_subtype,
+                "status": getattr(op_source, 'status', None),
+                "payload": op_source.payload,
+                "createdAt": op_source.created_at.isoformat() if op_source.created_at else None,
+                "updatedAt": op_source.updated_at.isoformat() if op_source.updated_at else None
+            }
+        }
+
+        return jsonify({
+            "success": True,
+            "message": "Operation added successfully" + (" and previous operation deleted" if operation_to_delete_id else ""),
+            "operation": op_info,
+            "deletedOperation": deleted_operation_info,
+            "process": {
+                "id": process.id,
+                "name": process.process_name,
+                "updatedAt": process.updated_at.isoformat()
+            }
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+def iso_or_none(dt):
+    return dt.isoformat() if dt else None
+
+def build_description_for_process(process_id):
+    """
+    Build a human-friendly description using all uploaded dataframes in the process.
+    """
+    all_dfs = DataFrame.query.filter_by(
+        process_id=process_id,
+        is_active=True,
+        is_originally_uploaded=True
+    ).all()
+
+    table_names = []
+    file_names = []
+    for df in all_dfs:
+        md = df.data_metadata or {}
+        table_names.append(md.get("tableName") or df.name or "unknown")
+        file_names.append(md.get("originalFileName") or getattr(df, "original_file_name", "unknown"))
+
+    return f"Select files {', '.join(table_names)} from files {', '.join(file_names)}" if table_names else ""

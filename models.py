@@ -282,6 +282,7 @@ class DataFrame(db.Model):
     storage_path = db.Column(db.String(512), nullable=False)  # Path in Firebase Storage
     is_active = db.Column(db.Boolean, default=True)
     is_originally_uploaded = db.Column(db.Boolean, default=False, nullable=True)  # Track if this was an uploaded file
+    is_draft = db.Column(db.Boolean, default=False, nullable=False)
 
     # Relationships
     process = db.relationship(

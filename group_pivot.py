@@ -385,9 +385,18 @@ def generate_pivot():
             process_id=process_id,
             name=source_table_name
         ).first()
+
         if not source_df:
             return jsonify({"error": f"Table '{source_table_name}' not found in process"}), 404
+        
+        output_df = DataFrame.query.filter_by(
+            process_id = process_id,
+            name = output_table_name
+        ).first()
 
+        if output_df:
+            return jsonify({"error": f'File with TableId {output_table_name} already exists.'}), 409
+        
         # Generate message for the pivot operation
         message = f"Create a pivot table from table {source_table_name} using specified column headers and rows, columns and values"
 
