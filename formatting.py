@@ -1296,6 +1296,7 @@ def get_process_formatting_steps(process_id):
         for step in formatting_steps:
             step_dict = step.to_dict()
             step_dict['title'] = "Formatting"  # Add title field
+            step_dict['description'] = step_dict['message']
             # Add source DataFrame details
             if step.source_dataframe:
                 step_dict['sourceDataframe'] = {
@@ -1358,7 +1359,6 @@ def update_formatting_step(formatting_step_id):
 
         try:
             config = data['configuration']
-
             if "formattingConfigs" in config:
                 row_count = None
                 if formatting_step.source_dataframe:
@@ -1376,6 +1376,9 @@ def update_formatting_step(formatting_step_id):
 
             # Update configuration
             formatting_step.configuration = config
+            formatting_step['message'] = f"Apply the specified formatting options to table {config['tableName']}"
+            formatting_step['description'] = f"Apply the specified formatting options to table {config['tableName']}"
+
             formatting_step.updated_at = datetime.now(timezone.utc)
             
             db.session.add(formatting_step)

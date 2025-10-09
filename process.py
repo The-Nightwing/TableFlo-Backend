@@ -2260,9 +2260,9 @@ def manage_process_operations(process_id):
         operation_type = data.get('operationType')
 
         allDataframes = DataFrame.query.filter_by(
-                process_id=process_id,
-                is_active=True,
-                is_originally_uploaded=True).all()
+            process_id=process_id,
+            is_active=True,
+            is_originally_uploaded=True).all()
         
         tableNames = []
         fileNames = []
@@ -2324,7 +2324,7 @@ def manage_process_operations(process_id):
             process_operation = ProcessOperation(
                 process_id=process_id,
                 title = deleted_operation_info.get('title') or operation_title,
-                description = description or '',
+                description = df_operation.message or deleted_operation_info.get('description') or '',
                 sequence=float(data['sequence']),
                 operation_name=df_operation.operation_type,
                 parameters=df_operation.payload,
