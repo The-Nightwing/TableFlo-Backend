@@ -507,7 +507,8 @@ def process_columns_and_types(email, process_id, table_name, column_selections=N
                     name=table_name,
                     email=email,
                     storage_path=storage_path,
-                    user_id=user.id
+                    user_id=user.id,
+                    is_temporary=True,
                 )
                 db.session.add(dataframe_record)
 
@@ -688,62 +689,61 @@ def process_columns():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-def get_process_table_data(email, process_name, table_name, page=1, per_page=100):
-    try:
-        if not all([email, process_name, table_name]):
-            raise ValueError("Email, process name, and table name are required")
+# def get_process_table_data(email, process_name, table_name, page=1, per_page=100):
+#     try:
+#         if not all([email, process_name, table_name]):
+#             raise ValueError("Email, process name, and table name are required")
 
-        # Define paths (changed to CSV)
-        df_path = f"{email}/process/{process_name}/dataframes/{table_name}.csv"
-        metadata_path = f"{email}/process/{process_name}/metadata/{table_name}.json"
+#         # Define paths (changed to CSV)
+#         df_path = f"{email}/process/{process_name}/dataframes/{table_name}.csv"
+#         metadata_path = f"{email}/process/{process_name}/metadata/{table_name}.json"
 
-        # Get metadata
-        metadata_blob = bucket.blob(metadata_path)
-        if not metadata_blob.exists():
-            raise FileNotFoundError(f"Metadata for table {table_name} not found")
+#         # Get metadata
+#         metadata_blob = bucket.blob(metadata_path)
+#         if not metadata_blob.exists():
+#             raise FileNotFoundError(f"Metadata for table {table_name} not found")
         
-        metadata = json.loads(metadata_blob.download_as_string())
+#         metadata = json.loads(metadata_blob.download_as_string())
 
-        # Get DataFrame
-        df_blob = bucket.blob(df_path)
-        if not df_blob.exists():
-            raise FileNotFoundError(f"Table {table_name} not found")
+#         # Get DataFrame
+#         df_blob = bucket.blob(df_path)
+#         if not df_blob.exists():
+#             raise FileNotFoundError(f"Table {table_name} not found")
 
-        # Calculate pagination
-        start_idx = (page - 1) * per_page
-        end_idx = start_idx + per_page
+#         # Calculate pagination
+#         start_idx = (page - 1) * per_page
+#         end_idx = start_idx + per_page
 
-        # Read CSV file instead of parquet
-        df_buffer = BytesIO(df_blob.download_as_bytes())
-        df = pd.read_csv(df_buffer)
+#         # Read CSV file instead of parquet
+#         df_buffer = BytesIO(df_blob.download_as_bytes())
+#         df = pd.read_csv(df_buffer)
         
-        # Get total rows for pagination
-        total_rows = len(df)
+#         # Get total rows for pagination
+#         total_rows = len(df)
         
-        # Slice the DataFrame for pagination
-        df = df.iloc[start_idx:end_idx]
+#         # Slice the DataFrame for pagination
+#         df = df.iloc[start_idx:end_idx]
 
-        # Prepare response
-        response = {
-            "metadata": metadata,
-            "data": {
-                "columns": list(df.columns),
-                "rows": df.fillna('').to_dict('records'),
-                "pagination": {
-                    "total_rows": total_rows,
-                    "current_page": page,
-                    "per_page": per_page,
-                    "total_pages": (total_rows + per_page - 1) // per_page
-                }
-            }
-        }
+#         # Prepare response
+#         response = {
+#             "metadata": metadata,
+#             "data": {
+#                 "columns": list(df.columns),
+#                 "rows": df.fillna('').to_dict('records'),
+#                 "pagination": {
+#                     "total_rows": total_rows,
+#                     "current_page": page,
+#                     "per_page": per_page,
+#                     "total_pages": (total_rows + per_page - 1) // per_page
+#                 }
+#             }
+#         }
 
-        return response
+#         return response
 
-    except ValueError as e:
-        raise ValueError(str(e))
-    except FileNotFoundError as e:
-        raise FileNotFoundError(str(e))
-    except Exception as e:
-        raise Exception(f"Error fetching table data: {str(e)}")
-
+#     except ValueError as e:
+#         raise ValueError(str(e))
+#     except FileNotFoundError as e:
+#         raise FileNotFoundError(str(e))
+#     except Exception as e:
+#         raise Exception(f"Error fetching table data: {str(e)}")

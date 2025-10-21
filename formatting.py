@@ -651,6 +651,10 @@ def process_formatting():
             name=output_table_name
         ).first()
 
+        if existing_df:
+            if existing_df.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
+
         try:
             # Generate storage location path
             storage_location = f"{email}/process/{process_id}/formatting/{output_table_name}"

@@ -282,7 +282,7 @@ class DataFrame(db.Model):
     storage_path = db.Column(db.String(512), nullable=False)  # Path in Firebase Storage
     is_active = db.Column(db.Boolean, default=True)
     is_originally_uploaded = db.Column(db.Boolean, default=False, nullable=True)  # Track if this was an uploaded file
-
+    is_temporary = db.Column(db.Boolean, default=False)
     # Relationships
     process = db.relationship(
         'UserProcess',
@@ -291,7 +291,7 @@ class DataFrame(db.Model):
     )
     user = db.relationship('User', backref='dataframes', lazy=True)
 
-    def __init__(self, process_id, name, email, row_count, column_count, storage_path, user_id=None, data_metadata=None, is_originally_uploaded=False):
+    def __init__(self, process_id, name, email, row_count, column_count, storage_path, user_id=None, data_metadata=None, is_originally_uploaded=False, is_temporary = True):
         self.id = generate_uuid()
         self.process_id = process_id
         self.user_id = user_id
@@ -300,6 +300,7 @@ class DataFrame(db.Model):
         self.row_count = row_count
         self.column_count = column_count
         self.storage_path = storage_path
+        self.is_temporary = is_temporary
         if isinstance(data_metadata, str):
             self.data_metadata = json.loads(data_metadata)
         else:
@@ -320,11 +321,12 @@ class DataFrame(db.Model):
             'metadata': self.data_metadata,
             'storagePath': self.storage_path,
             'isActive': self.is_active,
-            'isOriginallyUploaded': self.is_originally_uploaded
+            'isOriginallyUploaded': self.is_originally_uploaded,
+            "isTemporary": self.is_temporary
         }
 
     @staticmethod
-    def create_from_pandas(df, process_id, name, email, storage_path, user_id=None, is_originally_uploaded=False, metadata=None):
+    def create_from_pandas(df, process_id, name, email, storage_path, user_id=None, is_originally_uploaded=False, metadata=None, is_temporary=True):
         """
         Create a DataFrame record from a pandas DataFrame.
         
@@ -425,7 +427,8 @@ class DataFrame(db.Model):
             storage_path=storage_path,
             user_id=user_id,
             data_metadata=data_metadata,
-            is_originally_uploaded=is_originally_uploaded
+            is_originally_uploaded=is_originally_uploaded,
+            is_temporary = is_temporary
         )
 
 class OperationType(str, Enum):

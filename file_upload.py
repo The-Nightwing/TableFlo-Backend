@@ -12,7 +12,7 @@ import csv
 import os
 import requests
 from io import StringIO
-from models import db, File, UserProcess, DataFrame, User # Add this import at the top
+from models import ProcessOperation, db, File, UserProcess, DataFrame, User # Add this import at the top
 from datetime import datetime, timezone  # Add timezone to imports at the top
 
 # Create Blueprint
@@ -662,6 +662,14 @@ def store_dataframe_from_file(email, process_id, table_name, file_id, sheet_name
         file_record = File.query.filter_by(id=file_id).first()
         if not file_record:
             raise ValueError(f"File with ID '{file_id}' not found")
+        
+        is_first_step = False
+        existing_process_operation = ProcessOperation.query.filter_by(
+            process_id = process_id,
+        ).all()
+
+        if existing_process_operation is None:
+            is_first_step = True
 
         # Check if DataFrame already exists in this process
         existing_df = DataFrame.query.filter_by(
@@ -802,7 +810,8 @@ def store_dataframe_from_file(email, process_id, table_name, file_id, sheet_name
                     storage_path=storage_path,
                     user_id=process.user_id,
                     is_originally_uploaded=True,  # Set to True for uploaded files
-                    metadata=metadata  # Pass the metadata to create_from_pandas
+                    metadata=metadata,  # Pass the metadata to create_from_pandas,
+                    is_temporary = False if is_first_step else True
                 )
                 dataframe_record.data_metadata = metadata  # Update the metadata
                 db.session.add(dataframe_record)
@@ -866,6 +875,15 @@ def store_process_data():
         file_record = File.query.filter_by(id=file_id, user_id=user.id).first()
         if not file_record:
             return jsonify({"error": "File not found or access denied"}), 404
+
+        existingTable = DataFrame.query.filter_by(
+            process_id = process_id,
+            name = table_name
+        ).first()
+        
+        if existingTable:
+            if existingTable.is_temporary == False:
+                return jsonify({"error": f"Table with id {table_name} already exists."}), 409
 
         result = store_dataframe_from_file(
             email=email,
