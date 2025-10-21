@@ -114,7 +114,7 @@ def perform_horizontal_merge(df1, df2, key_pairs, method, show_count_summary):
                 # Get the final column order: original df1 + new (non-key) columns from df2
                 left_columns = list(df1.columns)
                 # Exclude right keys and also avoid duplicates
-                right_new_columns = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                right_new_columns = [col for col in df2.columns if col not in df2.columns and col not in df1.columns]
                 final_column_order = left_columns + right_new_columns
 
                 # Filter merged_df to keep only those columns, if they exist in the result
@@ -518,6 +518,10 @@ def merge_tables():
             name=output_table_name
         ).first()
 
+        if existing_df:
+            if existing_df.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
+
         # Generate message based on merge type and method
         merge_method = data.get('mergeMethod', 'inner')
         message = f"Merge tables {table1_name} and {table2_name} based on the {merge_method} method"
@@ -663,8 +667,9 @@ def preview_file():
 
                 # Get the final column order: original df1 + new (non-key) columns from df2
                 left_columns = list(df1.columns)
+
                 # Exclude right keys and also avoid duplicates
-                right_new_columns = [col for col in df2.columns if col not in right_keys and col not in df1.columns]
+                right_new_columns = [col for col in df2.columns if col not in df2.columns and col not in df1.columns]
                 final_column_order = left_columns + right_new_columns
 
                 # Filter merged_df to keep only those columns, if they exist in the result
@@ -1168,6 +1173,10 @@ def reconcile_files():
             process_id=process_id,
             name=output_table_name
         ).first()
+
+        if existing_df:
+            if existing_df.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
 
         # Generate message for reconciliation operation
         method = data.get('settings', {}).get('method', 'one-to-one')

@@ -1192,6 +1192,19 @@ def add_operation_to_process(process_id):
                 },
                 is_active=True
             )
+
+            # get all dataframes with is_temporary = true.
+            temp_dataframes_for_process = DataFrame.query.filter_by(
+                process_id = process_id,
+                is_temporary = True,
+            ).all()
+
+            # save all dataframes as False. At save step we are saving the tables.
+            for temp_ in temp_dataframes_for_process:
+                temp_.is_temporary = False
+                db.session.add(temp_)
+
+            db.session.commit()
         else:
             # Get the DataFrameOperation for other operation types
             df_operation = DataFrameOperation.query.get(data['dataframeOperationId'])
@@ -1243,6 +1256,23 @@ def add_operation_to_process(process_id):
                 dataframe_operation_id=df_operation.id,
                 is_active=True
             )
+
+            # only keep the last created dataframe, and delete all.
+            temp_dataframes = DataFrame.query.filter_by(
+                process_id=process_id,
+                is_temporary=True
+            ).order_by(DataFrame.created_at.desc()).all()
+
+            if temp_dataframes:
+                latest_dataframe = temp_dataframes[0]
+                latest_dataframe.is_temporary = False
+                db.session.add(latest_dataframe)
+
+                # Delete all others.
+                for df in temp_dataframes[1:]:
+                    db.session.delete(df)
+
+            db.session.commit()
 
         # Add operation to database
         db.session.add(process_operation)
@@ -1319,6 +1349,51 @@ def add_operation_to_process(process_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
+
+@process_bp.route('/<process_id>/deleteTempDataFrames', methods = ['DELETE'])
+def delete_temp_dataframes_from_process(process_id):
+    try:
+        email = request.headers.get("X-User-Email")
+        if not email:
+            return jsonify({"error": "Email is required"}), 400
+
+        # Get user and verify ownership
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        bucket = get_storage_bucket()
+
+        temp_dataframes = DataFrame.query.filter_by(
+            process_id=process_id,
+            is_temporary=True
+        ).all()
+
+        names = []
+        for temp_ in temp_dataframes:
+            # Delete CSV file
+            if temp_.storage_path:
+                csv_blob = bucket.blob(temp_.storage_path)
+                if csv_blob.exists():
+                    csv_blob.delete()
+            # Delete metadata file
+            metadata_path = f"{email}/process/{process_id}/metadata/{temp_.name}.json"
+            metadata_blob = bucket.blob(metadata_path)
+            names.append(temp_.name)
+            if metadata_blob.exists():
+                metadata_blob.delete()
+            db.session.delete(temp_)
+
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "message": f'Succesfully deleted temp dataframes: {names}',
+            "isAnyTableDeleted": True if len(names) >0 else False
+        })
+
+    except Exception as e:
+        print(f"Error in list_process_operations: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 @process_bp.route('/<process_id>/operations', methods=['GET'])
 def list_process_operations(process_id):
@@ -2287,6 +2362,19 @@ def manage_process_operations(process_id):
                 parameters={**batch_operation.payload, 'batchOperationId': batch_operation.id},
                 is_active=True
             )
+
+            # get all dataframes with is_temporary = true.
+            temp_dataframes_for_process = DataFrame.query.filter_by(
+                process_id = process_id,
+                is_temporary = True,
+            ).all()
+
+            # save all dataframes as False. At save step we are saving the tables.
+            for temp_ in temp_dataframes_for_process:
+                temp_.is_temporary = False
+                db.session.add(temp_)
+
+            db.session.commit()
         else:
             df_operation = DataFrameOperation.query.get(data['dataframeOperationId'])
             if not df_operation or df_operation.process_id != process_id:
@@ -2331,6 +2419,23 @@ def manage_process_operations(process_id):
                 dataframe_operation_id=df_operation.id,
                 is_active=True
             )
+
+            # only keep the last created dataframe, and delete all.
+            temp_dataframes = DataFrame.query.filter_by(
+                process_id=process_id,
+                is_temporary=True
+            ).order_by(DataFrame.created_at.desc()).all()
+
+            if temp_dataframes:
+                latest_dataframe = temp_dataframes[0]
+                latest_dataframe.is_temporary = False
+                db.session.add(latest_dataframe)
+                
+                # Delete all others.
+                for df in temp_dataframes[1:]:
+                    db.session.delete(df)
+
+            db.session.commit()
 
         db.session.add(process_operation)
         

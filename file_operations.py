@@ -551,6 +551,9 @@ def process_file_operations():
             process_id=process_id,
             name=output_table_name
         ).first()
+        if existing_df:
+            if existing_df.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
 
         # Generate message based on operations
         message_parts = []
@@ -730,7 +733,8 @@ def process_dataframe_operations(email, process_id, source_df, operations, outpu
                     name=output_table_name,
                     email=email,
                     storage_path=storage_path,
-                    user_id=source_df.user_id
+                    user_id=source_df.user_id,
+                    is_temporary=True,
                 )
                 db.session.add(dataframe_record)
 

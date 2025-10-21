@@ -465,6 +465,7 @@ def apply_operation():
         process_id = data.get('processId')
         table_name = data.get('tableName')
         new_column_name = data.get('newColumnName')
+        output_table_name = data.get('outputTableName')
         operation_type = data.get('operationType')
 
         if not all([process_id, table_name, new_column_name, operation_type]):
@@ -478,8 +479,17 @@ def apply_operation():
         process = UserProcess.query.filter_by(id=process_id, user_id=user.id).first()
         if not process:
             return jsonify({"error": "Process not found or access denied"}), 404
+        
+        # check if output table already exists.
+        existing_output_df = DataFrame.query.filter_by(
+            process_id=process_id,
+            name=output_table_name
+        ).first()
+        if existing_output_df:
+            if existing_output_df.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
 
-        # Get DataFrame record
+        # Get DataFrame record for source table
         dataframe = DataFrame.query.filter_by(
             process_id=process_id,
             name=table_name
@@ -612,36 +622,75 @@ def apply_operation():
             # Add the new column to DataFrame
             df[new_column_name] = result
 
-            # Update metadata
-            metadata['columnCount'] = len(df.columns)
-            metadata['columns'].append({
-                "name": new_column_name,
-                "type": column_type,
-                "operation": operation_type
-            })
-            metadata['updatedAt'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            # Prepare new metadata for output table (robust, like process_sort_filter_data)
+            now_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            new_metadata = {
+                "type": "add_column_table",
+                "description": f"Table created by adding column '{new_column_name}' to {table_name}",
+                "processId": process_id,
+                "createdAt": now_str,
+                "updatedAt": now_str,
+                "rowCount": len(df),
+                "columnCount": len(df.columns),
+                "columns": df.columns.tolist(),
+                "columnTypes": {col: str(df[col].dtype) for col in df.columns},
+                "operation": {
+                    "type": "add_column",
+                    "operationType": operation_type,
+                    "sourceTable": {
+                        "name": table_name
+                    },
+                    "newColumn": {
+                        "name": new_column_name,
+                        "type": column_type
+                    }
+                }
+            }
+
+            new_data_path = f"{email}/process/{process_id}/dataframes/{output_table_name}.csv"
+            new_metadata_path = f"{email}/process/{process_id}/metadata/{output_table_name}.json"
 
             try:
-                # Save updated DataFrame
+                # Save DataFrame as CSV
                 df_buffer = BytesIO()
                 df.to_csv(df_buffer, index=False)
                 df_buffer.seek(0)
-                csv_blob.upload_from_file(df_buffer, content_type='text/csv')
+                df_blob = bucket.blob(new_data_path)
+                df_blob.upload_from_file(df_buffer, content_type='text/csv')
 
-                # Save updated metadata
-                metadata_blob.upload_from_string(
-                    json.dumps(metadata, indent=2),
-                    content_type='application/json'
-                )
+                # Save metadata
+                metadata_blob = bucket.blob(new_metadata_path)
+                metadata_blob.upload_from_string(json.dumps(new_metadata, indent=2), content_type='application/json')
 
-                # Update DataFrame record and mark operation as successful
-                dataframe.column_count = len(df.columns)
-                dataframe.updated_at = datetime.now(timezone.utc)
+                # Create or update DataFrame record
+                if existing_output_df and existing_output_df.is_temporary:
+                    # Update the existing temporary DataFrame record
+                    existing_output_df.column_count = len(df.columns)
+                    existing_output_df.row_count = len(df)
+                    existing_output_df.updated_at = datetime.now(timezone.utc)
+                    existing_output_df.storage_path = new_data_path
+                    dataframe_record = existing_output_df
+                elif existing_output_df and existing_output_df.is_temporary == False:
+                    return jsonify({"error": f'Table with name {output_table_name} already exists.'}), 409
+                else:
+                    dataframe_record = DataFrame.create_from_pandas(
+                        df=df,
+                        process_id=process_id,
+                        name=output_table_name,
+                        email=email,
+                        storage_path=new_data_path,
+                        user_id=dataframe.user_id,
+                        is_temporary=True
+                    )
+                    db.session.add(dataframe_record)
+
+                db.session.commit()
+
+                # Mark operation as successful
                 df_operation.set_success()
                 db.session.commit()
 
-                # After operations are successfully applied and before returning success
-                # Add this code to gather metadata for the resulting DataFrame
+                # Gather metadata for the resulting DataFrame
                 result_metadata = {
                     "columns": df.columns.tolist(),
                     "columnTypes": {col: str(df[col].dtype) for col in df.columns},
@@ -651,19 +700,25 @@ def apply_operation():
                         "uniqueCounts": {col: int(df[col].nunique()) for col in df.columns}
                     }
                 }
-                
+
                 return jsonify({
                     "success": True,
-                    "message": message,  # Use the same message in the response
+                    "message": message,
                     "columnName": new_column_name,
                     "columnType": column_type,
-                    "dataframeId": dataframe.id,
+                    "dataframeId": dataframe_record.id,
                     "operationId": df_operation.id,
                     "operationStatus": df_operation.status,
                     "metadata": result_metadata
                 })
 
             except Exception as e:
+                db.session.rollback()
+                # Clean up uploaded files if they exist
+                if 'df_blob' in locals() and df_blob.exists():
+                    df_blob.delete()
+                if 'metadata_blob' in locals() and metadata_blob.exists():
+                    metadata_blob.delete()
                 df_operation.set_error(f"Failed to save updates: {str(e)}")
                 db.session.commit()
                 return jsonify({"error": f"Failed to save updates: {str(e)}"}), 500

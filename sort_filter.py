@@ -792,12 +792,13 @@ def process_sort_filter_data(email, process_id, source_df, sort_config, filter_c
                 dataframe_record = existing_df
             else:
                 dataframe_record = DataFrame.create_from_pandas(
-                    df=df,
+                    df=df,`
                     process_id=process_id,
                     name=output_table_name,
                     email=email,
                     storage_path=storage_path,
-                    user_id=source_df.user_id
+                    user_id=source_df.user_id,
+                    is_temporary=True
                 )
                 db.session.add(dataframe_record)
 
@@ -870,6 +871,9 @@ def process_sort_filter():
             process_id=process_id,
             name=output_table_name
         ).first()
+        if existing_df:
+            if existing_df.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
 
         # Generate message based on operation types
         message_parts = []
