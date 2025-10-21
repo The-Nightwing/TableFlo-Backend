@@ -792,7 +792,7 @@ def process_sort_filter_data(email, process_id, source_df, sort_config, filter_c
                 dataframe_record = existing_df
             else:
                 dataframe_record = DataFrame.create_from_pandas(
-                    df=df,`
+                    df=df,
                     process_id=process_id,
                     name=output_table_name,
                     email=email,
