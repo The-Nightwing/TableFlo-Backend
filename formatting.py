@@ -650,7 +650,6 @@ def process_formatting():
             process_id=process_id,
             name=output_table_name
         ).first()
-
         if existing_df:
             if existing_df.is_temporary == False:
                 return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
@@ -1083,7 +1082,8 @@ def process_dataframe_formatting(email, process_id, source_df, formatting_config
                     name=output_table_name,
                     email=email,
                     storage_path=csv_storage_path,
-                    user_id=source_df.user_id
+                    user_id=source_df.user_id,
+                    is_temporary=True
                 )
                 db.session.add(dataframe_record)
 
@@ -1198,6 +1198,22 @@ def include_formatting_step():
         
         try:
             db.session.add(formatting_step)
+
+            # only keep the last created dataframe, and delete all.
+            temp_dataframes = DataFrame.query.filter_by(
+                process_id=process_id,
+                is_temporary=True
+            ).order_by(DataFrame.created_at.desc()).all()
+
+            if temp_dataframes:
+                latest_dataframe = temp_dataframes[0]
+                latest_dataframe.is_temporary = False
+                db.session.add(latest_dataframe)
+
+                # Delete all others.
+                for df in temp_dataframes[1:]:
+                    db.session.delete(df)
+
             db.session.commit()
 
             return jsonify({
@@ -1380,9 +1396,8 @@ def update_formatting_step(formatting_step_id):
 
             # Update configuration
             formatting_step.configuration = config
-            formatting_step['message'] = f"Apply the specified formatting options to table {config['tableName']}"
-            formatting_step['description'] = f"Apply the specified formatting options to table {config['tableName']}"
-
+            formatting_step.message = f"Apply the specified formatting options to table {config['tableName']}"
+            formatting_step.description = f"Apply the specified formatting options to table {config['tableName']}"
             formatting_step.updated_at = datetime.now(timezone.utc)
             
             db.session.add(formatting_step)
