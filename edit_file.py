@@ -7,6 +7,7 @@ import json
 import traceback
 from models import User, db
 from models import UserProcess
+from models import File
 from datetime import datetime, timezone
 from models import DataFrame
 from models import DataFrameOperation
@@ -350,20 +351,64 @@ def process_columns_and_types(email, process_id, table_name, column_selections=N
         bucket = get_storage_bucket()
         
         # Define paths with .csv extension
-        source_path = f"{email}/process/{process_id}/dataframes/{table_name}.csv"  # Changed from .parquet
-        new_path = f"{email}/process/{process_id}/dataframes/{table_name}.csv"  # Changed from .parquet
-        
-        # Read source CSV file
-        source_blob = bucket.blob(source_path)
-        if not source_blob.exists():
-            # Try to find the file in uploaded_files directory as fallback
-            alt_source_path = f"{email}/uploaded_files/{table_name}"
-            source_blob = bucket.blob(alt_source_path)
+        source_path = f"{email}/process/{process_id}/dataframes/{table_name}.csv"
+        new_path = f"{email}/process/{process_id}/dataframes/{table_name}.csv"
+
+        # Prefer the original uploaded source file when available (originalFileName / sourceFileName / sourceFileId)
+        df = None
+        original_file = None
+        original_sheet = None
+        try:
+            if existing_df and existing_df.data_metadata:
+                md = existing_df.data_metadata
+                original_file = md.get('originalFileName') or md.get('sourceFileName')
+                original_sheet = md.get('originalSheetName') or md.get('sourceSheet')
+                # If only sourceFileId is present, try to resolve to filename
+                if not original_file and md.get('sourceFileId'):
+                    try:
+                        src_file_rec = File.query.filter_by(id=md.get('sourceFileId')).first()
+                        if src_file_rec:
+                            original_file = src_file_rec.file_name
+                    except Exception:
+                        original_file = None
+        except Exception:
+            original_file = None
+
+        if original_file:
+            orig_blob = bucket.blob(f"{email}/uploaded_files/{original_file}")
+            if orig_blob.exists():
+                content = orig_blob.download_as_bytes()
+                try:
+                    if original_file.lower().endswith(('.xls', '.xlsx')):
+                        # If sheet name is not provided or is 'N/A', default to first sheet
+                        sheet = original_sheet if original_sheet and original_sheet != 'N/A' else 0
+                        df = pd.read_excel(BytesIO(content), sheet_name=sheet)
+                    else:
+                        df = pd.read_csv(BytesIO(content))
+                except Exception as e:
+                    raise Exception(f"Failed to read original uploaded file '{original_file}': {str(e)}")
+            else:
+                # original_file referenced but not present in storage; fall back to processed CSV
+                df = None
+
+        # If original not available, fall back to reading the last-processed CSV
+        if df is None:
+            source_blob = bucket.blob(source_path)
             if not source_blob.exists():
-                raise FileNotFoundError(f"Source table {table_name} not found")
-            
-        df_buffer = BytesIO(source_blob.download_as_bytes())
-        df = pd.read_csv(df_buffer)  # Changed from read_parquet
+                # Try to find the file in uploaded_files directory as fallback using table_name
+                alt_source_path = f"{email}/uploaded_files/{table_name}"
+                source_blob = bucket.blob(alt_source_path)
+                if not source_blob.exists():
+                    raise FileNotFoundError(f"Source table {table_name} not found")
+
+            df_buffer = BytesIO(source_blob.download_as_bytes())
+            # Try to read as CSV by default
+            try:
+                df = pd.read_csv(df_buffer)
+            except Exception:
+                # Try Excel as a fallback
+                df_buffer.seek(0)
+                df = pd.read_excel(df_buffer)
         
         # If no column selections provided, use all columns
         if column_selections is None:
@@ -373,8 +418,6 @@ def process_columns_and_types(email, process_id, table_name, column_selections=N
             
         if not selected_columns:
             raise ValueError("No columns selected for processing")
-            
-        
         
         # Infer data types if not provided
         inferred_types = {}
@@ -432,7 +475,6 @@ def process_columns_and_types(email, process_id, table_name, column_selections=N
                     
             except Exception as e:
                 raise ValueError(f"Error converting column '{column}' to {target_type}: {str(e)}")
-        
         # Filter DataFrame to selected columns
         df = df[selected_columns]
         # Save processed DataFrame as CSV
