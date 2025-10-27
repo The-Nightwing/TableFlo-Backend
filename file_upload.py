@@ -965,14 +965,13 @@ def get_process_table_data(email, process_id, table_name, page=1, per_page=100):
         df = df.iloc[start_idx:end_idx]
 
         # Clean data based on column types - preserve data types
-        # for col in df.columns:
+        for col in df.columns:
         #     if pd.api.types.is_numeric_dtype(df[col]):
         #         df[col] = df[col].fillna(0)  # Use 0 for numeric NaN values
         #     elif pd.api.types.is_datetime64_any_dtype(df[col]):
         #         df[col] = df[col].fillna(pd.Timestamp('1900-01-01'))  # Use default date for date NaN values
-        #     else:
-        #         df[col] = df[col].fillna('')  # Use empty string for string NaN values
-
+            if df[col].isna().any():
+                df[col] = df[col].fillna('')  # Use empty string for string NaN values
         # Prepare response
         response = {
             "metadata": metadata,
