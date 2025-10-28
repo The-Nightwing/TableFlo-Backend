@@ -139,6 +139,9 @@ def apply_pattern(df, source_column, pattern):
     try:
         processed_pattern = pattern.replace("\\\\", "\\")
         # Get all matches but only use the first column
+        re.compile(processed_pattern)
+
+        # Extract matches
         matches = df[source_column].astype(str).str.extract(processed_pattern, expand=True)
         return matches.iloc[:, 0]  # Return only the first column of matches
     except Exception as e:
