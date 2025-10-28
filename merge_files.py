@@ -525,7 +525,10 @@ def merge_tables():
 
         # Generate message based on merge type and method
         merge_method = data.get('mergeMethod', 'inner')
-        message = f"Merge tables {table1_name} and {table2_name} based on the {merge_method} method"
+        if merge_type == "horizontal":
+            message = f"Merge tables {table1_name} and {table2_name} horizontally based on the {merge_method} method"
+        elif merge_type == "vertical":
+            message = f"Merge tables {table1_name} and {table2_name} vertically"
 
         # Create DataFrameOperation record with IN_PROGRESS status
         df_operation = DataFrameOperation(
