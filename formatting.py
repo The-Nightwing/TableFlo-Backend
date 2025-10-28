@@ -44,99 +44,81 @@ def convert_to_argb(hex_color):
     
     return hex_color.upper()
 
-def parse_range(range_str):
-    """Parse range string into list of cells/columns/rows.
+def parse_range(range_str, number_of_rows=None):
+    """
+    Parse range string into list of Excel-style ranges, with support for open-ended column and cell ranges.
     
     Args:
-        range_str (str): The range string to parse. Can be:
-            - Column format: 'A', 'A:D', 'A, C, F'
-            - Row format: '1', '1:4', '1, 5, 7'
-            - Cell format: 'A2', 'A2:D4', 'A2, B4, D6'
+        range_str (str): The range string, e.g. 'A:B', 'A2:B', 'A', 'A1:D4'
+        number_of_rows (int, optional): Total row count, used to expand open-ended ranges.
     
     Returns:
-        tuple: (list of parsed ranges, range_type)
-            range_type can be 'columns', 'rows', or 'cells'
-        
-    Raises:
-        ValueError: If the range string is invalid
+        tuple: (list_of_ranges, range_type)
     """
     if not range_str:
         return [], 'columns'
-        
+    
     parts = [p.strip() for p in range_str.split(',')]
     result = []
+    range_type = None
     
-    # Determine range type from the first part
-    first_part = parts[0]
-    if ':' in first_part:
-        start, end = first_part.split(':')
-        start = start.strip()
-        end = end.strip()
-        
-        # Check if it's a cell range (A1:D4)
-        if re.match(r'^[A-Z]+\d+$', start) and re.match(r'^[A-Z]+\d+$', end):
-            range_type = 'cells'
-        # Check if it's a column range (A:D)
-        elif re.match(r'^[A-Z]+$', start) and re.match(r'^[A-Z]+$', end):
-            range_type = 'columns'
-        # Check if it's a row range (1:4)
-        elif re.match(r'^\d+$', start) and re.match(r'^\d+$', end):
-            range_type = 'rows'
-        else:
-            raise ValueError(f"Invalid range format: {first_part}. Expected format: A:D, 1:4, or A1:D4")
-    else:
-        # Check if it's a single cell (A1)
-        if re.match(r'^[A-Z]+\d+$', first_part):
-            range_type = 'cells'
-        # Check if it's a single column (A)
-        elif re.match(r'^[A-Z]+$', first_part):
-            range_type = 'columns'
-        # Check if it's a single row (1)
-        elif re.match(r'^\d+$', first_part):
-            range_type = 'rows'
-        else:
-            raise ValueError(f"Invalid format: {first_part}. Expected format: A, 1, or A1")
-    
-    # Parse all parts according to the determined range type
     for part in parts:
-        if ':' in part:
+        # ---- 1️⃣ Identify the pattern ----
+        if re.match(r'^[A-Z]+\d*:[A-Z]+\d*$', part):  # e.g. A:B, A2:B, A1:B5
             start, end = part.split(':')
-            start = start.strip()
-            end = end.strip()
+            start, end = start.strip(), end.strip()
             
-            if range_type == 'cells':
-                if not (re.match(r'^[A-Z]+\d+$', start) and re.match(r'^[A-Z]+\d+$', end)):
-                    raise ValueError(f"Invalid cell range format: {part}. Expected format: A1:D4")
+            # Both sides are full cells (A1:D4)
+            if re.match(r'^[A-Z]+\d+$', start) and re.match(r'^[A-Z]+\d+$', end):
+                range_type = 'cells'
                 result.append(f"{start}:{end}")
             
-            elif range_type == 'columns':
-                if not (re.match(r'^[A-Z]+$', start) and re.match(r'^[A-Z]+$', end)):
-                    raise ValueError(f"Invalid column range format: {part}. Expected format: A:D")
-                start_idx = column_index_from_string(start)
-                end_idx = column_index_from_string(end)
-                result.extend([get_column_letter(i) for i in range(start_idx, end_idx + 1)])
+            # A:B → A2:B{rows}
+            elif re.match(r'^[A-Z]+$', start) and re.match(r'^[A-Z]+$', end):
+                range_type = 'cells'
+                if not number_of_rows:
+                    raise ValueError(f"number_of_rows required to expand open-ended column range: {part}")
+                result.append(f"{start}2:{end}{number_of_rows}")
             
-            elif range_type == 'rows':
-                if not (re.match(r'^\d+$', start) and re.match(r'^\d+$', end)):
-                    raise ValueError(f"Invalid row range format: {part}. Expected format: 1:4")
-                result.extend(range(int(start), int(end) + 1))
-                
-        else:
-            if range_type == 'cells':
-                if not re.match(r'^[A-Z]+\d+$', part):
-                    raise ValueError(f"Invalid cell format: {part}. Expected format: A1")
-                result.append(part)
+            # A2:B → A2:B{rows}
+            elif re.match(r'^[A-Z]+\d+$', start) and re.match(r'^[A-Z]+$', end):
+                range_type = 'cells'
+                if not number_of_rows:
+                    raise ValueError(f"number_of_rows required to expand open-ended range: {part}")
+                result.append(f"{start}:{end}{number_of_rows}")
             
-            elif range_type == 'columns':
-                if not re.match(r'^[A-Z]+$', part):
-                    raise ValueError(f"Invalid column format: {part}. Expected format: A")
-                result.append(part)
+            # A:B5 → A2:B5
+            elif re.match(r'^[A-Z]+$', start) and re.match(r'^[A-Z]+\d+$', end):
+                range_type = 'cells'
+                result.append(f"{start}2:{end}")
             
-            elif range_type == 'rows':
-                if not re.match(r'^\d+$', part):
-                    raise ValueError(f"Invalid row format: {part}. Expected format: 1")
+            else:
+                raise ValueError(f"Invalid range format: {part}. Expected A:D, 1:4, or A1:D4")
+
+        # ---- 2️⃣ Single column (A) → A2:A{rows} ----
+        elif re.match(r'^[A-Z]+$', part):
+            range_type = 'cells'
+            if not number_of_rows:
+                raise ValueError(f"number_of_rows required for single column range: {part}")
+            result.append(f"{part}2:{part}{number_of_rows}")
+        
+        # ---- 3️⃣ Row range ----
+        elif re.match(r'^\d+(:\d+)?$', part):
+            range_type = 'rows'
+            if ':' in part:
+                start, end = map(int, part.split(':'))
+                result.extend(range(start, end + 1))
+            else:
                 result.append(int(part))
-    
+        
+        # ---- 4️⃣ Single cell (A1) ----
+        elif re.match(r'^[A-Z]+\d+$', part):
+            range_type = 'cells'
+            result.append(part)
+        
+        else:
+            raise ValueError(f"Invalid range format: {part}. Expected A:D, 1:4, or A1:D4")
+
     return result, range_type
 
 def load_preview_file(bucket, email, file_name, sheet_name=None):
@@ -756,25 +738,14 @@ def process_dataframe_formatting(email, process_id, source_df, formatting_config
                 range_str = location.get('range', '')
 
                 # Parse the range string to get ranges and type
-                ranges, range_type = parse_range(range_str)
-                
-                # Expand column ranges like 'A:D' to 'A2:D{last_row}' for Excel formatting
-                expanded_ranges = []
-                if range_type == 'columns' and len(ranges) > 1:
-                    # Find first and last column
-                    start_col = ranges[0]
-                    end_col = ranges[-1]
-                    last_row = len(df)
-                    expanded_ranges.append(f"{start_col}2:{end_col}{last_row}")
-                else:
-                    expanded_ranges = ranges
+                ranges, range_type = parse_range(range_str, number_of_rows=len(df))
 
                 format_info = {
                     "type": format_type,
                     "location": location,
                     "details": format_details,
                     "rangeType": range_type,
-                    "ranges": expanded_ranges
+                    "ranges": ranges
                 }
 
                 # Apply formatting based on type
