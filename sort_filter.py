@@ -567,9 +567,26 @@ def apply_filter(df, column, operator, value):
         # Datetime
         elif pd.api.types.is_datetime64_any_dtype(col):
             try:
-                return df[col == pd.to_datetime(value)]
-            except (ValueError, TypeError):
-                return df[col == value]
+                # Ensure the column is in datetime format (handles mixed formats)
+                if not pd.api.types.is_datetime64_any_dtype(df[col]):
+                    col_dt = pd.to_datetime(df[col], errors='coerce', infer_datetime_format=True, dayfirst=True)
+                else:
+                    col_dt = df[col]
+
+                # Parse the incoming value, regardless of its format
+                value_dt = pd.to_datetime(value, errors='coerce', infer_datetime_format=True, dayfirst=True)
+
+                # If parsing succeeds, compare normalized datetimes (ignore time component)
+                if not pd.isna(value_dt):
+                    return df[col_dt.dt.normalize() == value_dt.normalize()]
+                else:
+                    # Fallback if parsing fails
+                    return df[df[col].astype(str).str.strip() == str(value).strip()]
+
+            except Exception:
+                # Final fallback for unexpected edge cases
+                return df[df[col].astype(str).str.strip() == str(value).strip()]
+
         # Boolean
         elif pd.api.types.is_bool_dtype(col):
             if isinstance(value, str):
