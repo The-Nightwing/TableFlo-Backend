@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 import pandas as pd
 from firebase_config import get_storage_bucket
@@ -11,12 +11,13 @@ import time
 import csv
 import os
 import requests
-from io import StringIO
+from io import StringIO, BytesIO
+# import io
 from models import ProcessOperation, db, File, UserProcess, DataFrame, User # Add this import at the top
 from datetime import datetime, timezone  # Add timezone to imports at the top
 
 # Create Blueprint
-file_processing_bp = Blueprint('file_processing', __name__, url_prefix='/api/')
+file_processing_bp = Blueprint('file_processing', __name__, url_prefix='/api')
 
 # Configurations
 ALLOWED_EXTENSIONS = {'xls', 'xlsx', 'csv'}
@@ -28,7 +29,7 @@ import threading
 import json
 from firebase_config import get_storage_bucket
 
-file_processing_bp = Blueprint('file_processing', __name__, url_prefix='/api')
+file_processing_bp = Blueprint('file_processing', __name__, url_prefix='/api/file-processing/')
 
 # Get Firebase Storage bucket
 bucket = get_storage_bucket()
@@ -634,6 +635,40 @@ def get_sheet_data():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@file_processing_bp.route('/download-file/<processId>/<filePath>', methods=['GET'])
+def get_process_blob(processId, filePath):
+    """
+    API to fetch a file/blob from Firebase Storage for a given user and process.
+    Query Parameters:
+        processId (str): ID of the process
+        filePath (str): Relative path to the file inside the process folder (e.g. 'dataframes/table1.csv')
+    Headers:
+        X-User-Email (str): User's email
+    Returns:
+        The file/blob as a response with appropriate content type.
+    """
+    try:
+        email = request.headers.get("X-User-Email")
+        if not email:
+            return jsonify({'error': 'Email header is required'}), 400
+        # Construct the full path in Firebase Storage
+        storage_path = f"{email}/process/{processId}/dataframes/{filePath}.csv"
+        blob = bucket.blob(storage_path)
+        if not blob.exists():
+            return jsonify({'error': f'File not found at {storage_path}'}), 404
+
+        data = blob.download_as_bytes()
+        # Try to infer content type
+        return send_file(
+            BytesIO(data),
+            as_attachment=True,
+            download_name=filePath,
+            mimetype='text/csv'  # or detect dynamically
+        )
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 def store_dataframe_from_file(email, process_id, table_name, file_id, sheet_name=None, description=""):
     """
     Store a DataFrame from an existing file in a process folder structure and save its metadata.
@@ -1047,3 +1082,4 @@ def get_table_data():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
