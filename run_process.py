@@ -445,9 +445,19 @@ def execute_process_run(process_id):
 
                 elif op.operation_name == 'add_column':
                     try:
+                        # Resolve the mapped source dataframe
+                        source_table_key = op.parameters.get('tableName')
+                        if source_table_key not in dataframe_mappings:
+                            raise ValueError(f"Source table not found in mappings: {source_table_key}")
+
+                        mapped_source_id = dataframe_mappings[source_table_key]['id']
+                        mapped_source_df = DataFrame.query.get(mapped_source_id)
+                        if not mapped_source_df:
+                            raise ValueError(f"Mapped source DataFrame not found: {mapped_source_id}")
+
                         df_operation = DataFrameOperation(
                             process_id=process_id,
-                            dataframe_id=dataframe_mappings[op.parameters.get('tableName')]['id'],
+                            dataframe_id=mapped_source_df.id,
                             operation_type=OperationType.ADD_COLUMN.value,
                             operation_subtype=op.parameters.get('operationType'),
                             payload=op.parameters
@@ -455,21 +465,35 @@ def execute_process_run(process_id):
                         db.session.add(df_operation)
                         db.session.commit()
 
+                        # Execute add_column against the source table. If an outputTableName is
+                        # provided in parameters, pass it through so the function can create
+                        # a new table instead of modifying the source in-place.
                         result = process_add_column(
                             email=email,
                             process_name=process.id,
-                            table_name=op.parameters.get('tableName'),
+                            table_name=mapped_source_df.name,
                             new_column_name=op.parameters.get('newColumnName'),
                             operation_type=op.parameters.get('operationType'),
-                            operation_params=op.parameters
+                            operation_params=op.parameters,
+                            output_table_name=op.parameters.get('outputTableName')
                         )
 
                         if result.get('success'):
+                            # If a new output table was created, add it to mappings so
+                            # subsequent operations reference the new table.
+                            out_name = op.parameters.get('outputTableName') or result.get('name')
+                            if out_name:
+                                dataframe_mappings[out_name] = {
+                                    'id': result.get('id'),
+                                    'metadata': result.get('metadata', {})
+                                }
+
                             operation_result.update({
                                 "status": "completed",
                                 "operation_details": {
                                     "id": df_operation.id,
                                     "sourceTable": op.parameters.get('tableName'),
+                                    "outputTable": out_name,
                                     "dataframeId": result.get('id'),
                                     "message": result.get('message')
                                 }
@@ -484,7 +508,7 @@ def execute_process_run(process_id):
                             })
                             df_operation.set_error(result.get('error'))
                             errors += 1
-                        
+
                     except Exception as e:
                         print(f"Error in add_column operation: {str(e)}")
                         operation_result.update({
