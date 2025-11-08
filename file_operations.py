@@ -693,9 +693,12 @@ def process_dataframe_operations(email, process_id, source_df, operations, outpu
                     new_value = replacement.get('newValue')
                     match_case = replacement.get('matchCase', True)
                     
-                    if match_case:
-                        # Case-sensitive replacement
-                        df[column] = df[column].replace(old_value, new_value)
+                    if match_case or pd.api.types.is_numeric_dtype(df[column]):
+                        # Direct replacement for numeric or case-sensitive
+                        try:
+                            df[column] = df[column].replace(float(old_value), float(new_value))
+                        except ValueError:
+                            df[column] = df[column].replace(old_value, new_value)
                     else:
                         # Case-insensitive replacement for string values
                         mask = df[column].astype(str).str.lower() == str(old_value).lower()

@@ -1453,6 +1453,7 @@ def list_process_operations(process_id):
             "process": {
                 "id": process.id,
                 "name": process.process_name,
+                "isDraft": process.is_draft,
                 "createdAt": process.created_at.isoformat(),
                 "updatedAt": process.updated_at.isoformat()
             },
