@@ -21,15 +21,7 @@ file_processing_bp = Blueprint('file_processing', __name__, url_prefix='/api')
 
 # Configurations
 ALLOWED_EXTENSIONS = {'xls', 'xlsx', 'csv'}
-bucket = get_storage_bucket()
 CHUNK_SIZE = 15 * 1024 * 1024  # 5MB per chunk
-
-from flask import Blueprint, request, jsonify
-import threading
-import json
-from firebase_config import get_storage_bucket
-
-file_processing_bp = Blueprint('file_processing', __name__, url_prefix='/api/file-processing/')
 
 # Get Firebase Storage bucket
 bucket = get_storage_bucket()
