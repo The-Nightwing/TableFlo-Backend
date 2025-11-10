@@ -410,11 +410,28 @@ def process_columns_and_types(email, process_id, table_name, column_selections=N
                 df_buffer.seek(0)
                 df = pd.read_excel(df_buffer)
         
-        # If no column selections provided, use all columns
+        # If no column selections provided, use all columns.
+        # If selections are provided, preserve the original dataframe column order
+        # by iterating df.columns and checking the selection map/list. This avoids
+        # relying on the dict insertion order from the payload which can be different
+        # from the source table order.
         if column_selections is None:
             selected_columns = list(df.columns)
         else:
-            selected_columns = [col for col, selected in column_selections.items() if selected]
+            # column_selections might be a dict mapping column->bool or a list of column names
+            if isinstance(column_selections, dict):
+                selected_columns = [col for col in list(df.columns) if column_selections.get(col)]
+            elif isinstance(column_selections, list):
+                # If it's a list, preserve df column order but include only those in the list
+                sel_set = set(column_selections)
+                selected_columns = [col for col in list(df.columns) if col in sel_set]
+            else:
+                # Fallback: try to interpret as dict-like
+                try:
+                    selected_columns = [col for col in list(df.columns) if column_selections.get(col)]
+                except Exception:
+                    # As a last resort, use all columns
+                    selected_columns = list(df.columns)
             
         if not selected_columns:
             raise ValueError("No columns selected for processing")

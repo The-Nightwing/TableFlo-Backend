@@ -335,7 +335,7 @@ def get_process_table_data(email, process_name, table_name, page=None, per_page=
             'error': f"Unexpected error: {str(e)}"
         }
 
-def process_add_column(email, process_name, table_name, new_column_name, operation_type, operation_params):
+def process_add_column(email, process_name, table_name, new_column_name, operation_type, operation_params, output_table_name=None):
     """
     Process the addition of a new column to a table
     
@@ -414,31 +414,129 @@ def process_add_column(email, process_name, table_name, new_column_name, operati
             else:
                 return {'success': False, 'error': "Invalid operation type"}
 
-            # Add the new column and update the table
+            # Add the new column to the DataFrame
             df[new_column_name] = result
-            update_result = update_process_table_data(
-                email=email,
-                process_name=process_name,
-                table_name=table_name,
-                data=df.to_dict('records'),
-                new_column={
-                    'name': new_column_name,
-                    'type': column_type
-                }
-            )
 
-            if not update_result.get('success'):
+            # Determine output table name: prefer explicit parameter, then operation_params
+            out_name = output_table_name or operation_params.get('outputTableName')
+
+            # If an output table name is provided and different from the source, create a new table
+            if out_name and str(out_name).strip() and str(out_name) != str(table_name):
+                # Create new metadata and save as a new table (similar to /apply/ behavior)
+                try:
+                    now_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                    new_metadata = {
+                        "type": "add_column_table",
+                        "description": f"Table created by adding column '{new_column_name}' to {table_name}",
+                        "processId": process_name,
+                        "createdAt": now_str,
+                        "updatedAt": now_str,
+                        "rowCount": len(df),
+                        "columnCount": len(df.columns),
+                        "columns": df.columns.tolist(),
+                        "columnTypes": {col: str(df[col].dtype) for col in df.columns},
+                        "operation": {
+                            "type": "add_column",
+                            "operationType": operation_type,
+                            "sourceTable": {"name": table_name},
+                            "newColumn": {"name": new_column_name, "type": column_type}
+                        }
+                    }
+
+                    bucket = get_storage_bucket()
+                    new_data_path = f"{email}/process/{process_name}/dataframes/{out_name}.csv"
+                    new_metadata_path = f"{email}/process/{process_name}/metadata/{out_name}.json"
+
+                    # Save DataFrame as CSV to storage
+                    df_buffer = BytesIO()
+                    df.to_csv(df_buffer, index=False)
+                    df_buffer.seek(0)
+                    df_blob = bucket.blob(new_data_path)
+                    df_blob.upload_from_file(df_buffer, content_type='text/csv')
+
+                    # Save metadata
+                    metadata_blob = bucket.blob(new_metadata_path)
+                    metadata_blob.upload_from_string(json.dumps(new_metadata, indent=2), content_type='application/json')
+
+                    # Create or update DataFrame record
+                    existing_output_df = DataFrame.query.filter_by(process_id=process_name, name=out_name).first()
+                    if existing_output_df:
+                        if not existing_output_df.is_temporary:
+                            return {'success': False, 'error': f"Table with name {out_name} already exists."}
+                        existing_output_df.column_count = len(df.columns)
+                        existing_output_df.row_count = len(df)
+                        existing_output_df.updated_at = datetime.now(timezone.utc)
+                        existing_output_df.storage_path = new_data_path
+                        dataframe_record = existing_output_df
+                    else:
+                        dataframe_record = DataFrame.create_from_pandas(
+                            df=df,
+                            process_id=process_name,
+                            name=out_name,
+                            email=email,
+                            storage_path=new_data_path,
+                            user_id=None,
+                            is_temporary=True
+                        )
+                        db.session.add(dataframe_record)
+
+                    db.session.commit()
+
+                    result_metadata = {
+                        "columns": df.columns.tolist(),
+                        "columnTypes": {col: str(df[col].dtype) for col in df.columns},
+                        "summary": {
+                            "rowCount": len(df),
+                            "nullCounts": {col: int(df[col].isna().sum()) for col in df.columns},
+                            "uniqueCounts": {col: int(df[col].nunique()) for col in df.columns}
+                        }
+                    }
+
+                    return {
+                        'success': True,
+                        'message': f"Column '{new_column_name}' added to new table '{out_name}'",
+                        'columnName': new_column_name,
+                        'columnType': column_type,
+                        'id': dataframe_record.id,
+                        'name': dataframe_record.name,
+                        'metadata': result_metadata
+                    }
+
+                except Exception as e:
+                    db.session.rollback()
+                    # Attempt cleanup
+                    try:
+                        if 'df_blob' in locals() and df_blob.exists():
+                            df_blob.delete()
+                        if 'metadata_blob' in locals() and metadata_blob.exists():
+                            metadata_blob.delete()
+                    except:
+                        pass
+                    return {'success': False, 'error': f"Failed to create output table: {str(e)}"}
+
+            else:
+                # No separate output table requested: update the existing source table
+                update_result = update_process_table_data(
+                    email=email,
+                    process_name=process_name,
+                    table_name=table_name,
+                    data=df.to_dict('records'),
+                    new_column={'name': new_column_name, 'type': column_type}
+                )
+
+                if not update_result.get('success'):
+                    return {'success': False, 'error': update_result.get('error')}
+
+                # Return success and id of updated dataframe (if available)
+                existing_df = DataFrame.query.filter_by(process_id=process_name, name=table_name).first()
                 return {
-                    'success': False,
-                    'error': update_result.get('error')
+                    'success': True,
+                    'message': f"Column '{new_column_name}' added successfully to '{table_name}'",
+                    'columnName': new_column_name,
+                    'columnType': column_type,
+                    'id': existing_df.id if existing_df else None,
+                    'name': existing_df.name if existing_df else table_name
                 }
-
-            return {
-                'success': True,
-                'message': f"Column '{new_column_name}' added successfully",
-                'columnName': new_column_name,
-                'columnType': column_type
-            }
 
         except Exception as e:
             return {
