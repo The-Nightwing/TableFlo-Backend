@@ -198,7 +198,7 @@ def process_natural_language():
         elif data.get("operation_type") == "reconcile":
             required_fields = ["query", "operation_type", "process_id", "sourceTableNames", "output_table_name"]
         else:
-            required_fields = ["query", "operation_type", "tableName", "process_id"]
+            required_fields = ["query", "operation_type", "tableName", "process_id", "output_table_name"]
 
         if not all(k in data for k in required_fields):
             print(f"[DEBUG] Missing fields. Received: {list(data.keys())}")
@@ -743,7 +743,8 @@ def process_natural_language():
                     table_name=result["parameters"].get("tableName"),
                     new_column_name=result["parameters"].get("newColumnName"),
                     operation_type=result["parameters"].get("operationType"),
-                    operation_params=result["parameters"]
+                    operation_params=result["parameters"],
+                    output_table_name=result["parameters"].get("output_table_name")
                 )
                 print(f"[DEBUG] Add column operation result: {operation_result}")
 
@@ -768,7 +769,7 @@ def process_natural_language():
                     try:
                         # For add_column, the table name is the same (no new table is created)
                         table_name = result["parameters"].get("tableName")
-                        metadata_path = f"{email}/process/{data['process_id']}/metadata/{table_name}.json"
+                        metadata_path = f"{email}/process/{data['process_id']}/metadata/{output_table_name}.json"
                         metadata_blob = bucket.blob(metadata_path)
                         if metadata_blob.exists():
                             updated_metadata = json.loads(metadata_blob.download_as_string())
