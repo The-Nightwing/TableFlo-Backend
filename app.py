@@ -834,7 +834,7 @@ def process_natural_language():
                     
                 return jsonify({"error": str(e)}), 500
 
-        elif data["operation_type"] == "sort_filter":
+        elif data["operation_type"] in ["sort", "filter", "sort_filter"]:
             try:
                 print("[DEBUG] Processing sort_filter operation")
                 
@@ -875,7 +875,15 @@ def process_natural_language():
                         dataframe_metadata=transformed_metadata,
                         table2_metadata=None
                     )
-                    
+
+                    if data["operation_type"] == "sort":
+                        print(f"[DEBUG] Sort operation result: {result}")
+                        if len(result.get("parameters").get("sort_config")) == 0:
+                            return jsonify({"error": f"Query and operation type mismatch. Query : {data['query']} and Operation : {data['operation_type']}"}), 409
+                    elif data["operation_type"] == "filter":
+                        print(f"[DEBUG] Filter operation result: {result}")
+                        if len(result.get("parameters").get("filter_config")) == 0:
+                            return jsonify({"error": f"Query and operation type mismatch. Query : {data['query']} and Operation : {data['operation_type']}"}), 409                    
                     if not result.get("success"):
                         print(f"[DEBUG] run_chain error: {result.get('error')}")
                         return jsonify({"error": result.get("error")}), 400
