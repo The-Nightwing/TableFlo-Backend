@@ -210,6 +210,15 @@ def process_natural_language():
         output_table_name = data.get("output_table_name")
         print(f"[DEBUG] Output table name: {output_table_name}")
 
+                # Check if output table name already exists
+        existing_df = DataFrame.query.filter_by(
+            process_id=data.get('process_id'),
+            name=output_table_name
+        ).first()
+        if existing_df:
+            if existing_df.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
+
         # Get user process and verify ownership
         print(f"[DEBUG] Fetching process with ID: {data['process_id']}")
         process = UserProcess.query.filter_by(
