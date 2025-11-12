@@ -900,7 +900,7 @@ Note:
   * Match data types when replacing values
 """
 
-    elif operation_type in ["sort", "filter"]:
+    elif operation_type == "sort_filter":
         template = """You are a data processing assistant. Create filter and sort operations based on the available columns.
 
 Available columns and their types:
