@@ -633,7 +633,8 @@ def get_process_blob(processId, filePath):
     API to fetch a file/blob from Firebase Storage for a given user and process.
     Query Parameters:
         processId (str): ID of the process
-        filePath (str): Relative path to the file inside the process folder (e.g. 'dataframes/table1.csv')
+        filePath (str): Relative path to the file inside the process folder (e.g. 'dataframes/table1')
+        fileType (str, optional): 'csv' or 'xlsx' (default: 'csv')
     Headers:
         X-User-Email (str): User's email
     Returns:
@@ -643,23 +644,56 @@ def get_process_blob(processId, filePath):
         email = request.headers.get("X-User-Email")
         if not email:
             return jsonify({'error': 'Email header is required'}), 400
-        # Construct the full path in Firebase Storage
-        storage_path = f"{email}/process/{processId}/dataframes/{filePath}.csv"
-        blob = bucket.blob(storage_path)
-        if not blob.exists():
-            return jsonify({'error': f'File not found at {storage_path}'}), 404
 
+        # Get file type from query param, default to csv
+        file_type = request.args.get("fileType", "csv").lower()
+        if file_type not in ["csv", "xlsx"]:
+            return jsonify({'error': 'Invalid fileType. Allowed values: csv, xlsx'}), 400
+
+        # Construct storage path for requested file type
+        storage_path = f"{email}/process/{processId}/dataframes/{filePath}.{file_type}"
+        blob = bucket.blob(storage_path)
+
+        if not blob.exists():
+            if file_type == "xlsx":
+                # Try to find CSV and convert to XLSX
+                csv_path = f"{email}/process/{processId}/dataframes/{filePath}.csv"
+                csv_blob = bucket.blob(csv_path)
+
+                if not csv_blob.exists():
+                    return jsonify({'error': f'File not found at {storage_path} or as CSV'}), 404
+
+                # Download CSV and convert to XLSX in-memory
+                csv_data = csv_blob.download_as_bytes()
+                df = pd.read_csv(BytesIO(csv_data))
+                output = BytesIO()
+                df.to_excel(output, index=False, engine='openpyxl')
+                output.seek(0)
+
+                return send_file(
+                    output,
+                    as_attachment=True,
+                    download_name=f"{filePath}.xlsx",
+                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                return jsonify({'error': f'File not found at {storage_path}'}), 404
+
+        # If file exists as requested type
         data = blob.download_as_bytes()
-        # Try to infer content type
+        mimetype = "text/csv" if file_type == "csv" else \
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
         return send_file(
             BytesIO(data),
             as_attachment=True,
-            download_name=filePath,
-            mimetype='text/csv'  # or detect dynamically
+            download_name=f"{filePath}.{file_type}",
+            mimetype=mimetype
         )
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 def store_dataframe_from_file(email, process_id, table_name, file_id, sheet_name=None, description=""):
     """
