@@ -1249,6 +1249,14 @@ def process_natural_language():
                 table2_name = data["table2Name"]
                 output_table_name = data["output_table_name"]
 
+                merge_method = result["parameters"].get("mergeMethod", "left")
+                merge_type = result["parameters"].get("mergeType", "horizontal")
+                if merge_type == "horizontal":
+                    message = f"Merge tables {table1_name} and {table2_name} horizontally based on the {merge_method} method"
+                elif merge_type == "vertical":
+                    message = f"Merge tables {table1_name} and {table2_name} vertically"
+
+
                 # Update parameters with table names from request
                 result["parameters"].update({
                     "table1Name": table1_name,
@@ -1261,7 +1269,8 @@ def process_natural_language():
                     dataframe_id=dataframe.id,  # Using first dataframe's ID
                     operation_type=OperationType.MERGE_FILES.value,
                     operation_subtype=result["parameters"].get("mergeType"),
-                    payload=result["parameters"]
+                    payload=result["parameters"],
+                    message=message
                 )
                 db.session.add(df_operation)
                 db.session.commit()
