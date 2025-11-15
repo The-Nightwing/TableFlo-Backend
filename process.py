@@ -1239,7 +1239,7 @@ def add_operation_to_process(process_id):
                     elif "filterconfig" in payload_str:
                         operation_title = "Filter"
                 elif df_operation.operation_type == "replace_rename_reorder":
-                    operation_title = "Replace Rename Reorder"
+                    operation_title = "Other Edits"
                 elif df_operation.operation_type == "reconcile_files":
                     operation_title = "Reconcile"
                 elif df_operation.operation_type == "apply_formatting":
@@ -2347,7 +2347,7 @@ def manage_process_operations(process_id):
             tableNames.append(metadata.get('tableName'))
             fileNames.append(metadata.get('originalFileName'))
 
-        description = f'Select files {", ".join(tableNames)} from files {", ".join(fileNames)}'
+        description = f'Select table(s) {", ".join(tableNames)} from files {", ".join(fileNames)}'
 
         if operation_type == 'edit_file':
             batch_operation = DataFrameBatchOperation.query.get(data['dataframeOperationId'])
@@ -2404,7 +2404,7 @@ def manage_process_operations(process_id):
                     elif "filterconfig" in payload_str:
                         operation_title = "Filter"
                 elif df_operation.operation_type == "replace_rename_reorder":
-                    operation_title = "Replace Rename Reorder"
+                    operation_title = "Other Edits"
                 elif df_operation.operation_type == "reconcile_files":
                     operation_title = "Reconcile"
                 elif df_operation.operation_type == "apply_formatting":

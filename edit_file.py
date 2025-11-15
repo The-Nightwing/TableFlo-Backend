@@ -646,7 +646,7 @@ def process_columns():
             tableNames.append(metadata.get('tableName'))
             fileNames.append(metadata.get('originalFileName'))
 
-        description = f'Select files {", ".join(tableNames)} from files {", ".join(fileNames)}'
+        description = f'Select table(s) {", ".join(tableNames)} from files {", ".join(fileNames)}'
 
         # Create batch operation record
         batch_operation = DataFrameBatchOperation(
