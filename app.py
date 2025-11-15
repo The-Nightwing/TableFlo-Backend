@@ -2,7 +2,11 @@ import asyncio
 from flask import Blueprint, request, jsonify
 from flask import Blueprint, request, jsonify
 from models import DataFrame, UserProcess, DataFrameOperation, OperationType, db, FormattingStep, AIRequest, User
-from llm_chain import run_chain
+from llm_chain import run_chain, get_openai_api_key
+from pydantic import BaseModel, Field
+from langchain.prompts import PromptTemplate
+from langchain.output_parsers import PydanticOutputParser
+from langchain_community.chat_models import ChatOpenAI
 import json
 from datetime import datetime, timezone
 from add_column import process_add_column
@@ -15,6 +19,79 @@ from firebase_config import get_storage_bucket
 from io import BytesIO
 
 nlp_bp = Blueprint('nlp', __name__, url_prefix='/api/nlp')
+
+
+class IntentValidation(BaseModel):
+    match: bool = Field(description="Whether the query matches the expected operation")
+    predicted_operation: str = Field(description="Predicted operation type by the AI")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score between 0 and 1")
+    explanation: str = Field(description="Short explanation why the model predicted this")
+
+
+def ai_validate_intent(user_query: str, expected_operation: str, metadata: dict) -> dict:
+    """Ask the LLM to validate whether the user's query intent matches the expected operation.
+
+    Returns a dict: { success: bool, match: bool, predicted_operation: str, confidence: float, explanation: str }
+    On failure returns { success: False, error: str }
+    """
+    try:
+        parser = PydanticOutputParser(pydantic_object=IntentValidation)
+        format_instructions = parser.get_format_instructions()
+
+        # Build a compact column summary for context
+        cols = metadata.get('columns') or []
+        ctypes = metadata.get('columnTypes') or {}
+        column_info = "\n".join([f"- {c} ({ctypes.get(c, 'unknown')})" for c in cols])
+
+        prompt = PromptTemplate(
+            template=(
+                "You are a precise classifier. Given a user's natural-language query and the expected operation type,\n"
+                "decide whether the query's intent matches the expected operation. Respond ONLY in the JSON schema described.\n\n"
+                "Schema: {format_instructions}\n\n"
+                "Context - Table columns:\n{column_info}\n\n"
+                "User query: {user_query}\n"
+                "Expected operation: {expected_operation}\n\n"
+                "Choose predicted_operation from: add_column, sort, filter, merge, reconcile, group_pivot, formatting, file_operations, unknown.\n"
+                "If you are uncertain, set match=false and give a low confidence. Be concise in explanation."
+            ),
+            input_variables=["user_query", "expected_operation", "column_info"],
+            partial_variables={"format_instructions": format_instructions}
+        )
+
+        api_key = get_openai_api_key()
+        llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0, openai_api_key=api_key)
+        chain = prompt | llm | parser
+
+        res = chain.invoke({
+            "user_query": user_query,
+            "expected_operation": expected_operation,
+            "column_info": column_info
+        })
+
+        parsed = res.args
+        return {
+            "success": True,
+            "match": bool(parsed.match),
+            "predicted_operation": parsed.predicted_operation,
+            "confidence": float(parsed.confidence),
+            "explanation": parsed.explanation
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def validate_intent_or_abort(user_query: str, expected_operation: str, metadata: dict, min_confidence: float = 0.6):
+    """Single helper to run AI intent validation and return a Flask response tuple on failure.
+
+    Returns None on success, or a (response_body, status_code) tuple to be returned by the caller.
+    """
+    validation = ai_validate_intent(user_query, expected_operation, metadata)
+    if not validation.get("success"):
+        print(f"[DEBUG] AI intent validation failed: {validation.get('error')}")
+        return ({"error": "AI validation failed", "details": validation.get("error")}, 500)
+    if not validation.get("match") and validation.get("confidence", 0) > min_confidence:
+        return ({"error": f"Query and operation type mismatch. Query: {user_query}", "ai": validation}, 409)
+    return None
 
 def transform_metadata(metadata):
     """Transform metadata to match DataFrameMetadata model requirements"""
@@ -336,6 +413,14 @@ def process_natural_language():
                 transformed_metadata = transform_metadata(metadata)
                 transformed_metadata2 = transform_metadata(metadata2) if metadata2 else None
 
+                # Validate intent once using centralized helper
+                err = validate_intent_or_abort(data.get("query", ""), operation_type, transformed_metadata)
+                if err:
+                    # Return a concise, actionable error including the user's query and the requested operation
+                    return jsonify({
+                        "error": f"Query and operation type mismatch. Query: {data['query']}, operationType: {data['operation_type']}",
+                    }), 409
+
                 # Call run_chain for merge operation
                 result = run_chain(
                     user_input=data["query"],
@@ -398,6 +483,14 @@ def process_natural_language():
             # Transform both metadata objects
             transformed_metadata = transform_metadata(metadata)
             transformed_metadata2 = transform_metadata(metadata2) if metadata2 else None
+
+            # Validate intent once using centralized helper
+            err = validate_intent_or_abort(data.get("query", ""), "reconcile", transformed_metadata)
+            if err:
+                # Return a concise, actionable error including the user's query and the requested operation
+                return jsonify({
+                    "error": f"Query and operation type mismatch. Query: {data['query']}, operationType: {data['operation_type']}",
+                }), 409
 
             # Call run_chain with transformed metadata
             result = run_chain(
@@ -701,7 +794,13 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
-                    
+                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
+                    if err:
+                        # Return a concise, actionable error including the user's query and the requested operation
+                        return jsonify({
+                            "error": f"Query and operation type mismatch. Query: {data['query']}, operationType: {data['operation_type']}",
+                        }), 409
+
                     # Call run_chain with transformed metadata
                     result = run_chain(
                         user_input=data["query"],
@@ -874,6 +973,12 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
+                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata1)
+                    if err:
+                        # Return a concise, actionable error including the user's query and the requested operation
+                        return jsonify({
+                            "error": f"Query and operation type mismatch. Query: {data['query']}, operationType: {data['operation_type']}",
+                        }), 409
                     
                     # Call run_chain with transformed metadata
                     result = run_chain(
@@ -1045,6 +1150,12 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
+                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata1)
+                    if err:
+                        # Return a concise, actionable error including the user's query and the requested operation
+                        return jsonify({
+                            "error": f"Query and operation type mismatch. Query: {data['query']}, operationType: {data['operation_type']}",
+                        }), 409
                     
                     # Call run_chain with transformed metadata
                     result = run_chain(
@@ -1227,6 +1338,14 @@ def process_natural_language():
                         transformed_metadata1 = transform_metadata(metadata1)
                         transformed_metadata2 = transform_metadata(metadata2)
                         
+                        # Single centralized validation before generating merge parameters
+                        err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata1)
+                        if err:
+                            # Return a concise, actionable error including the user's query and the requested operation
+                            return jsonify({
+                                "error": f"Query and operation type mismatch. Query: {data['query']}, operationType: {data['operation_type']}",
+                            }), 409
+
                         # Call run_chain to get merge parameters
                         result = run_chain(
                             user_input=data["query"],
@@ -1410,6 +1529,13 @@ def process_natural_language():
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
                     
+                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata1)
+                    if err:
+                        # Return a concise, actionable error including the user's query and the requested operation
+                        return jsonify({
+                            "error": f"Query and operation type mismatch. Query: {data['query']}, operationType: {data['operation_type']}",
+                        }), 409
+                    
                     # Call run_chain with transformed metadata
                     result = run_chain(
                         user_input=data["query"],
@@ -1577,6 +1703,13 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
+                    
+                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
+                    if err:
+                        # Return a concise, actionable error including the user's query and the requested operation
+                        return jsonify({
+                            "error": f"Query and operation type mismatch. Query: {data['query']}, operationType: {data['operation_type']}",
+                        }), 409
                     
                     # Call run_chain with transformed metadata
                     result = run_chain(
