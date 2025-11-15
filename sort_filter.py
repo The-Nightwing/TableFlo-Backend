@@ -556,6 +556,7 @@ def get_column_type(series):
 
 def apply_filter(df, column, operator, value):
     """Apply filter operation to DataFrame."""
+    print(type(df[column]))
     if operator == "equals":
         col = df[column]
         # Numeric
@@ -621,47 +622,56 @@ def apply_filter(df, column, operator, value):
         return df[~df[column].astype(str).str.contains(str(value), case=False, na=False)]
     elif operator == "greater_than":
         # Handle date filtering
-        if pd.api.types.is_datetime64_any_dtype(df[column]):
-            try:
-                filter_date = pd.to_datetime(value)
-                return df[df[column] > filter_date]
-            except (ValueError, TypeError):
-                # If date parsing fails, try numeric comparison
-                return df[pd.to_numeric(df[column], errors='coerce') > float(value)]
-        else:
+        col = pd.to_datetime(df[column], errors='coerce')
+        # If the entire column failed to convert, fallback to numeric
+        if col.isna().all():
             return df[pd.to_numeric(df[column], errors='coerce') > float(value)]
+
+        # Now handle date filtering
+        try:
+            filter_date = pd.to_datetime(value)
+            return df[col > filter_date]
+        except:
+            return df[pd.to_numeric(df[column], errors='coerce') > float(value)]
+
     elif operator == "less_than":
         # Handle date filtering
-        if pd.api.types.is_datetime64_any_dtype(df[column]):
-            try:
-                filter_date = pd.to_datetime(value)
-                return df[df[column] < filter_date]
-            except (ValueError, TypeError):
-                # If date parsing fails, try numeric comparison
-                return df[pd.to_numeric(df[column], errors='coerce') < float(value)]
-        else:
+        col = pd.to_datetime(df[column], errors='coerce')
+        # If the entire column failed to convert, fallback to numeric
+        if col.isna().all():
+            return df[pd.to_numeric(df[column], errors='coerce') < float(value)]
+
+        # Now handle date filtering
+        try:
+            filter_date = pd.to_datetime(value)
+            return df[col < filter_date]
+        except:
             return df[pd.to_numeric(df[column], errors='coerce') < float(value)]
     elif operator == "greater_equals":
         # Handle date filtering
-        if pd.api.types.is_datetime64_any_dtype(df[column]):
-            try:
-                filter_date = pd.to_datetime(value)
-                return df[df[column] >= filter_date]
-            except (ValueError, TypeError):
-                # If date parsing fails, try numeric comparison
-                return df[pd.to_numeric(df[column], errors='coerce') >= float(value)]
-        else:
+        col = pd.to_datetime(df[column], errors='coerce')
+        # If the entire column failed to convert, fallback to numeric
+        if col.isna().all():
+            return df[pd.to_numeric(df[column], errors='coerce') >= float(value)]
+
+        # Now handle date filtering
+        try:
+            filter_date = pd.to_datetime(value)
+            return df[col >= filter_date]
+        except:
             return df[pd.to_numeric(df[column], errors='coerce') >= float(value)]
     elif operator == "less_equals":
         # Handle date filtering
-        if pd.api.types.is_datetime64_any_dtype(df[column]):
-            try:
-                filter_date = pd.to_datetime(value)
-                return df[df[column] <= filter_date]
-            except (ValueError, TypeError):
-                # If date parsing fails, try numeric comparison
-                return df[pd.to_numeric(df[column], errors='coerce') <= float(value)]
-        else:
+        col = pd.to_datetime(df[column], errors='coerce')
+        # If the entire column failed to convert, fallback to numeric
+        if col.isna().all():
+            return df[pd.to_numeric(df[column], errors='coerce') <= float(value)]
+
+        # Now handle date filtering
+        try:
+            filter_date = pd.to_datetime(value)
+            return df[col <= filter_date]
+        except:
             return df[pd.to_numeric(df[column], errors='coerce') <= float(value)]
     elif operator == "starts_with":
         return df[df[column].astype(str).str.startswith(str(value))]
