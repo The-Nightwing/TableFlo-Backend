@@ -914,8 +914,8 @@ def execute_process_run(process_id):
             #"columnCount": df.column_count,
             #"isOriginallyUploaded": df.is_originally_uploaded,
             #"isActive": df.is_active,
-            #"createdAt": df.created_at.isoformat() if df.created_at else None,
-            #"updatedAt": df.updated_at.isoformat() if df.updated_at else None,
+            "createdAt": df.created_at.isoformat() if df.created_at else None,
+            "updatedAt": df.updated_at.isoformat() if df.updated_at else None
             #"metadata": df.data_metadata,
             #"storagePath": df.storage_path
         } for df in dataframes]
