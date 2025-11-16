@@ -1000,7 +1000,7 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
-                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata1)
+                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
                     if err:
                         # Return a concise, actionable error including the user's query and the requested operation
                         return jsonify({
@@ -1177,7 +1177,7 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
-                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata1)
+                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
                     if err:
                         # Return a concise, actionable error including the user's query and the requested operation
                         return jsonify({
@@ -1556,7 +1556,7 @@ def process_natural_language():
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
                     
-                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata1)
+                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
                     if err:
                         # Return a concise, actionable error including the user's query and the requested operation
                         return jsonify({
