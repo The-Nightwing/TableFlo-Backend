@@ -690,6 +690,28 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
             raise ValueError("Second table metadata is required for merge and reconcile operations")
         
         structured_output = chain.invoke(context_input)
+
+        # Normalize structured output from chain: it may be a Pydantic model, have an `args` attribute,
+        # or be a dict depending on LangChain version. Extract parameters accordingly.
+        def _extract_parameters(obj):
+            if obj is None:
+                return {}
+            if hasattr(obj, 'args'):
+                return obj.args
+            if isinstance(obj, dict):
+                return obj
+            if hasattr(obj, 'model_dump'):
+                try:
+                    return obj.model_dump()
+                except Exception:
+                    return {}
+            # Fallback: try to convert to dict if possible
+            try:
+                return dict(obj)
+            except Exception:
+                return {}
+
+        parsed_params = _extract_parameters(structured_output)
         
         # Calculate processing time
         processing_time = time.time() - start_time
@@ -710,7 +732,7 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
             "tableName": table_name,
             "process_id": process_id,
             "table_name": table_name,
-            "parameters": structured_output.args,
+            "parameters": parsed_params,
             "metadata_used": {
                 "table1": {
                     "numeric_columns": numeric_columns,

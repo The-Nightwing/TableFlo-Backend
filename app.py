@@ -68,13 +68,40 @@ def ai_validate_intent(user_query: str, expected_operation: str, metadata: dict)
             "column_info": column_info
         })
 
-        parsed = res.args
+        # Normalize parser output: LangChain's PydanticOutputParser may return a pydantic model
+        # or an object with an `args` attribute. Handle both and also dicts.
+        def _get_field(obj, key, default=None):
+            if obj is None:
+                return default
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            if hasattr(obj, key):
+                return getattr(obj, key)
+            # pydantic models expose model_dump for Python-side dict
+            if hasattr(obj, 'model_dump'):
+                try:
+                    return obj.model_dump().get(key, default)
+                except Exception:
+                    return default
+            return default
+
+        parsed_obj = None
+        if hasattr(res, 'args'):
+            parsed_obj = res.args
+        else:
+            parsed_obj = res
+
+        match_val = _get_field(parsed_obj, 'match', False)
+        predicted_operation = _get_field(parsed_obj, 'predicted_operation') or _get_field(parsed_obj, 'predictedOperation')
+        confidence = _get_field(parsed_obj, 'confidence', 0.0)
+        explanation = _get_field(parsed_obj, 'explanation', '')
+
         return {
             "success": True,
-            "match": bool(parsed.match),
-            "predicted_operation": parsed.predicted_operation,
-            "confidence": float(parsed.confidence),
-            "explanation": parsed.explanation
+            "match": bool(match_val),
+            "predicted_operation": predicted_operation,
+            "confidence": float(confidence) if confidence is not None else 0.0,
+            "explanation": explanation
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
