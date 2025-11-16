@@ -598,24 +598,57 @@ def apply_filter(df, column, operator, value):
             return df[col.astype(str) == str(value)]
     elif operator == "not_equals":
         col = df[column]
-        if pd.api.types.is_numeric_dtype(col):
-            try:
-                return df[col != float(value)]
-            except (ValueError, TypeError):
-                return df[col != value]
-        elif pd.api.types.is_datetime64_any_dtype(col):
-            try:
-                return df[col != pd.to_datetime(value)]
-            except (ValueError, TypeError):
-                return df[col != value]
-        elif pd.api.types.is_bool_dtype(col):
+
+        # ---------- BOOLEAN COLUMN HANDLING ----------
+        if pd.api.types.is_bool_dtype(col):
+            # Convert user input to boolean safely
             if isinstance(value, str):
-                val = value.lower() in ["true", "1", "yes"]
+                val = value.lower().strip() in ["true", "1", "yes"]
             else:
                 val = bool(value)
             return df[col != val]
-        else:
-            return df[col.astype(str) != str(value)]
+
+        # ---------- TRY DATETIME COLUMN LOGIC ----------
+        dt_col = pd.to_datetime(col, errors='coerce')
+
+        # If entire column is NOT datetime → skip date handling
+        if not dt_col.isna().all():
+
+            # Helper to parse user-provided dates (DD-MM-YYYY supported)
+            def parse_user_date(val):
+                # Try pandas first with dayfirst=True
+                try:
+                    return pd.to_datetime(val, dayfirst=True)
+                except:
+                    pass
+
+                # Try explicit formats
+                formats = [
+                    "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y",
+                    "%Y-%m-%d", "%Y/%m/%d"
+                ]
+                for fmt in formats:
+                    try:
+                        return pd.to_datetime(datetime.strptime(val, fmt))
+                    except:
+                        pass
+                return None
+
+            filter_date = parse_user_date(value)
+
+            # If parsed successfully → use datetime comparison
+            if filter_date is not None:
+                return df[dt_col != filter_date]
+
+        # ---------- NUMERIC FALLBACK ----------
+        try:
+            return df[pd.to_numeric(col, errors='coerce') != float(value)]
+        except:
+            pass
+
+        # ---------- STRING FALLBACK ----------
+        return df[col.astype(str) != str(value)]
+
     elif operator == "contains":
         return df[df[column].astype(str).str.contains(str(value), case=False, na=False)]
     elif operator == "not_contains":
