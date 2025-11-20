@@ -591,12 +591,14 @@ def process_natural_language():
                             }), 400
 
             # Create DataFrameOperation record
+            operation_message = f"Reconciling tables {request_source_table_names} with output '{output_table_name}'"
             df_operation = DataFrameOperation(
                 process_id=data["process_id"],
                 dataframe_id=source_dfs[0].id,  # Using first dataframe's ID
                 operation_type=OperationType.RECONCILE_FILES.value,
                 operation_subtype="reconcile",
-                payload=result["parameters"]
+                payload=result["parameters"],
+                message=operation_message
             )
             db.session.add(df_operation)
             db.session.commit()
@@ -861,12 +863,14 @@ def process_natural_language():
                             op["fixed_value"] = op["column2"]
                             op["column2"] = None
 
+                operation_message = f"Adding column '{result['parameters'].get('newColumnName', '')}' to table '{result['parameters'].get('tableName', '')}' with operation '{result['parameters'].get('operationType', '')}'"
                 df_operation = DataFrameOperation(
                     process_id=data["process_id"],
                     dataframe_id=dataframe.id,
                     operation_type=OperationType.ADD_COLUMN.value,
                     operation_subtype=result["parameters"].get("operationType"),
-                    payload=result["parameters"]
+                    payload=result["parameters"],
+                    message=operation_message
                 )
                 db.session.add(df_operation)
                 db.session.commit()
@@ -1039,12 +1043,14 @@ def process_natural_language():
                 elif not result["parameters"].get("output_table_name"):
                     result["parameters"]["output_table_name"] = f"{data['tableName']}_filtered"
 
+                operation_message = f"Sort/filter on table '{result['parameters'].get('tableName', '')}' to output '{result['parameters'].get('output_table_name', '')}'"
                 df_operation = DataFrameOperation(
                     process_id=data["process_id"],
                     dataframe_id=dataframe.id,
                     operation_type=OperationType.SORT_FILTER.value,
                     operation_subtype="sort_filter",
-                    payload=result["parameters"]
+                    payload=result["parameters"],
+                    message=operation_message
                 )
                 db.session.add(df_operation)
                 db.session.commit()
@@ -1208,12 +1214,14 @@ def process_natural_language():
                 elif not result["parameters"].get("outputTableName"):
                     result["parameters"]["outputTableName"] = f"{data['tableName']}_pivot"
 
+                operation_message = f"Group/pivot on table '{result['parameters'].get('tableName', '')}' to output '{output_table_name}'"
                 df_operation = DataFrameOperation(
                     process_id=data["process_id"],
                     dataframe_id=dataframe.id,
                     operation_type=OperationType.GROUP_PIVOT.value,
                     operation_subtype="group_pivot",
-                    payload=result["parameters"]
+                    payload=result["parameters"],
+                    message=operation_message
                 )
                 db.session.add(df_operation)
                 db.session.commit()
@@ -1590,12 +1598,14 @@ def process_natural_language():
                 elif not result["parameters"].get("outputTableName"):
                     result["parameters"]["outputTableName"] = f"{data['tableName']}_modified"
 
+                operation_message = f"Replace/rename/reorder on table '{result['parameters'].get('tableName', '')}' to output '{output_table_name}'"
                 df_operation = DataFrameOperation(
                     process_id=data["process_id"],
                     dataframe_id=dataframe.id,
                     operation_type=OperationType.REPLACE_RENAME_REORDER.value,
                     operation_subtype="replace_rename_reorder",
-                    payload=result["parameters"]
+                    payload=result["parameters"],
+                    message=operation_message
                 )
                 db.session.add(df_operation)
                 db.session.commit()
