@@ -165,7 +165,7 @@ class UserProcess(db.Model):
     file_mappings = db.Column(db.JSON, nullable=True)  # Store file key mappings
     file_metadata = db.Column(db.JSON, nullable=True)  # Store file metadata
     created_at = db.Column(db.DateTime, default=datetime.now)
-    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now())
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
     is_active = db.Column(db.Boolean, default=True)
     is_original = db.Column(db.Boolean, nullable=True)  # Track if this is an original process
     original_process_id = db.Column(db.String(36), db.ForeignKey('user_processes.id'), nullable=True)  # ID of the process this was copied from
