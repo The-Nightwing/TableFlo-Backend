@@ -1,10 +1,13 @@
 import os
+import datetime
+from typing import Optional, List, Dict, Any, Union
+
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import PydanticOutputParser
-from pydantic import BaseModel, Field, model_validator, field_validator, ConfigDict, ValidationInfo
 from langchain_community.chat_models import ChatOpenAI
-from typing import Optional, List, Dict, Any, Union
-import datetime
+from langchain.memory import ChatMessageHistory
+from langchain.schema.runnable import RunnableWithMessageHistory
+from pydantic import BaseModel, Field, model_validator, field_validator, ConfigDict, ValidationInfo
 from typing_extensions import Annotated
 
 # Get OpenAI API key from environment variable or config
@@ -610,7 +613,20 @@ class RegexArgs(BaseModel):
     pattern: str = Field(description="The actual regex pattern")
     explanation: str = Field(description="A brief explanation of how the pattern works")
 
-def run_chain(user_input: str, operation_type: str, table_name: str, process_id: str, dataframe_metadata: Dict[str, Any], table2_metadata: Optional[Dict[str, Any]] = None):
+############################
+# In-memory chat histories #
+############################
+
+_SESSION_CHAT_STORE: Dict[str, ChatMessageHistory] = {}
+
+def _get_message_history(session_id: str) -> ChatMessageHistory:
+    """Return (and create if needed) a ChatMessageHistory for a session id."""
+    if session_id not in _SESSION_CHAT_STORE:
+        _SESSION_CHAT_STORE[session_id] = ChatMessageHistory()
+    return _SESSION_CHAT_STORE[session_id]
+
+
+def run_chain(user_input: str, operation_type: str, table_name: str, process_id: str, dataframe_metadata: Dict[str, Any], table2_metadata: Optional[Dict[str, Any]] = None, session_id: str = "default"):
     """
     Process natural language input with context about the DataFrame(s)
     
@@ -664,8 +680,16 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
         # Create operation-specific prompt template
         prompt_template = create_operation_prompt(operation_type, df_meta, df2_meta)
         
-        # Create chain with appropriate parser
-        chain = create_chain(operation_type, prompt_template)
+        # Create chain with appropriate parser (base runnable)
+        base_chain = create_chain(operation_type, prompt_template)
+
+        # Wrap with message history so prior turns are injected via "chat_history"
+        chain = RunnableWithMessageHistory(
+            base_chain,
+            _get_message_history,
+            input_messages_key="user_input",      # Which key contains the latest user text
+            history_messages_key="chat_history"    # Injected variable name into prompt
+        )
         
         # Add context to user input
         context_input = {
@@ -689,7 +713,11 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
         elif (operation_type == "merge-files" or operation_type == "reconcile") and not df2_meta:
             raise ValueError("Second table metadata is required for merge and reconcile operations")
         
-        structured_output = chain.invoke(context_input)
+        # Invoke with session id so history persists across calls
+        structured_output = chain.invoke(
+            context_input,
+            config={"configurable": {"session_id": session_id}}
+        )
 
         # Normalize structured output from chain: it may be a Pydantic model, have an `args` attribute,
         # or be a dict depending on LangChain version. Extract parameters accordingly.
@@ -758,8 +786,10 @@ def create_operation_prompt(operation_type: str, df_meta: DataFrameMetadata, df2
     format_instructions = parser.get_format_instructions()
     
     # Define base variables that are common to all operations
+    # We add chat_history so previous turns are available.
     all_variables = [
         "user_input", 
+        "chat_history",  # injected by RunnableWithMessageHistory
         "tableName", 
         "column_info",
         "column_count",
@@ -777,6 +807,9 @@ def create_operation_prompt(operation_type: str, df_meta: DataFrameMetadata, df2
             "table2_categorical_columns"
         ])
         template = """You are a data processing assistant. Create merge operations based on the available tables.
+
+    Chat History (most recent last):
+    {chat_history}
 
 First Table columns and their types:
 {column_info}
@@ -843,6 +876,9 @@ Note:
 
     elif operation_type == "replace_rename_reorder":
         template = """You are a data processing assistant. Create operations to modify the DataFrame structure and values.
+
+    Chat History (most recent last):
+    {chat_history}
 
 Available columns and their types:
 {column_info}
@@ -925,6 +961,9 @@ Note:
     elif operation_type == "sort_filter":
         template = """You are a data processing assistant. Create filter and sort operations based on the available columns.
 
+    Chat History (most recent last):
+    {chat_history}
+
 Available columns and their types:
 {column_info}
 
@@ -988,6 +1027,9 @@ Note:
     elif operation_type == "group_pivot":
         template = """You are a data processing assistant. Create grouping and pivot operations based on the available columns.
 
+    Chat History (most recent last):
+    {chat_history}
+
 Available columns and their types:
 {column_info}
 
@@ -1037,6 +1079,9 @@ Note:
 
     elif operation_type == "add_column":
         template = """You are a data processing assistant. Create a new column based on the available columns.
+
+    Chat History (most recent last):
+    {chat_history}
 
 Available columns and their types:
 {column_info}
@@ -1160,6 +1205,9 @@ Note:
 
     elif operation_type == "reconcile":
         template = """You are a data processing assistant. Create reconciliation operations for comparing and matching data between two tables.
+
+    Chat History (most recent last):
+    {chat_history}
 
 First Table columns and their types:
 {column_info}
@@ -1317,6 +1365,9 @@ Example response:
     elif operation_type == "format":
         template = """You are a data formatting assistant. Create formatting operations for a DataFrame to make it visually appealing.
 
+    Chat History (most recent last):
+    {chat_history}
+
 Available columns and their types:
 {column_info}
 
@@ -1412,6 +1463,9 @@ Note:
 
     elif operation_type == "regex":
         template = """You are a regex pattern generation assistant. Create regex patterns based on natural language descriptions.
+
+    Chat History (most recent last):
+    {chat_history}
 
 User request: {user_input}
 
