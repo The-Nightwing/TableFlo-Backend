@@ -939,7 +939,7 @@ def process_natural_language():
                             "sourceTable": result["parameters"].get("tableName"),
                             "dataframeId": df_operation.dataframe_id,
                             "message": operation_result.get('message'),
-                            "newTableName": result["parameters"].get("tableName"),
+                            "newTableName": result["parameters"].get("output_table_name"),
                             "aiRequestId": ai_request.id,
                             "retryCount": ai_request.retry_count,
                             "maxRetries": ai_request.max_retries,
