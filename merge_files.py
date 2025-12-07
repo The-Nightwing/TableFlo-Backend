@@ -1131,7 +1131,8 @@ def reconcile_files():
             'values',           # Value columns to compare
             'settings',         # Reconciliation settings
             'crossReference',   # Cross-reference rules
-            'outputTableName'   # Name for the reconciled table
+            'outputTableName1',   # Name for the reconciled table 1
+            'outputTableName2'  # Name for the reconciled table 2
         ]
         for field in required_fields:
             if field not in data:
@@ -1139,7 +1140,8 @@ def reconcile_files():
 
         process_id = data.get('processId')
         source_table_names = data.get('sourceTableNames')
-        output_table_name = data.get('outputTableName', '').strip()
+        output_table_name1 = data.get('outputTableName1', '').strip()
+        output_table_name2 = data.get('outputTableName2', '').strip()
 
         # Get user and verify ownership
         user = User.query.filter_by(email=email).first()
@@ -1173,14 +1175,25 @@ def reconcile_files():
                 return jsonify({"error": f"Basis table '{basis_table_name}' not found in source tables"}), 400
 
         # Check if output table name already exists
-        existing_df = DataFrame.query.filter_by(
+        existing_df_1 = DataFrame.query.filter_by(
             process_id=process_id,
-            name=output_table_name
+            name=output_table_name1
         ).first()
 
-        if existing_df:
-            if existing_df.is_temporary == False:
-                return jsonify({"error": f"Table with name {output_table_name} already exists."}), 409
+        if existing_df_1:
+            if existing_df_1.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name1} already exists."}), 409
+        
+        existing_df_2 = DataFrame.query.filter_by(
+            process_id=process_id,
+            name=output_table_name1
+        ).first()
+
+        if existing_df_2:
+            if existing_df_2.is_temporary == False:
+                return jsonify({"error": f"Table with name {output_table_name2} already exists."}), 409
+        
+
 
         # Generate message for reconciliation operation
         method = data.get('settings', {}).get('method', 'one-to-one')
@@ -1230,8 +1243,10 @@ def reconcile_files():
                 values=data['values'],
                 settings=data['settings'],
                 cross_reference=data['crossReference'],
-                output_table_name=output_table_name,
-                existing_df=existing_df
+                output_table_name1=output_table_name1,
+                output_table_name2=output_table_name2,
+                existing_df_1=existing_df_1,
+                existing_df_2=existing_df_2
             )
 
             if not result.get('success'):
@@ -1329,7 +1344,7 @@ def detect_column_type(series):
     except:
         return 'string'
 
-def process_dataframe_reconciliation(email, process_id, source_dfs, keys, values, settings, cross_reference, output_table_name, existing_df=None):
+def process_dataframe_reconciliation(email, process_id, source_dfs, keys, values, settings, cross_reference, output_table_name1, output_table_name2, existing_df_1=None, existing_df_2=None):
     """Process reconciliation between two DataFrames."""
     try:
         bucket = get_storage_bucket()
@@ -1528,79 +1543,100 @@ def process_dataframe_reconciliation(email, process_id, source_dfs, keys, values
         # Calculate value differences and matches
         calculate_value_differences(df_left, df_right, values)
 
-        # Save results
-        storage_path = f"{email}/process/{process_id}/dataframes/{output_table_name}.csv"
-        
-        # Combine results into a single DataFrame
-        result_df = pd.concat([df_left, df_right], axis=0, ignore_index=True)
-        
-        # Save to storage
-        csv_buffer = BytesIO()
-        result_df.to_csv(csv_buffer, index=False)
-        csv_buffer.seek(0)
-        
-        bucket.blob(storage_path).upload_from_file(
-            csv_buffer,
-            content_type='text/csv'
-        )
+        # Save left table
+        storage_path1 = f"{email}/process/{process_id}/dataframes/{output_table_name1}.csv"
+        csv_buffer1 = BytesIO()
+        df_left.to_csv(csv_buffer1, index=False)
+        csv_buffer1.seek(0)
+        bucket.blob(storage_path1).upload_from_file(csv_buffer1, content_type='text/csv')
 
-        # Generate and store metadata
-        metadata = {
-            'tableName': output_table_name,
-            'description': f'Reconciliation result of {source_dfs[0].name} and {source_dfs[1].name}',
-            'sourceFileId': [df.id for df in source_dfs],
+        metadata1 = {
+            'tableName': output_table_name1,
+            'description': f'Reconciliation LEFT result of {source_dfs[0].name}',
+            'sourceFileId': source_dfs[0].id,
             'columns': [
-                {
-                    'name': col,
-                    'type': str(result_df[col].dtype)
-                }
-                for col in result_df.columns
+                {'name': col, 'type': str(df_left[col].dtype)} for col in df_left.columns
             ],
             'summary': {
-                'nullCounts': result_df.isnull().sum().to_dict(),
-                'uniqueCounts': result_df.nunique().to_dict()
+                'nullCounts': df_left.isnull().sum().to_dict(),
+                'uniqueCounts': df_left.nunique().to_dict()
             }
         }
+        metadata_path1 = f"{email}/process/{process_id}/metadata/{output_table_name1}.json"
+        bucket.blob(metadata_path1).upload_from_string(json.dumps(metadata1), content_type='application/json')
 
-        # Save metadata to storage
-        metadata_path = f"{email}/process/{process_id}/metadata/{output_table_name}.json"
-        metadata_blob = bucket.blob(metadata_path)
-        metadata_blob.upload_from_string(
-            json.dumps(metadata),
-            content_type='application/json'
-        )
+        # Save right table
+        storage_path2 = f"{email}/process/{process_id}/dataframes/{output_table_name2}.csv"
+        csv_buffer2 = BytesIO()
+        df_right.to_csv(csv_buffer2, index=False)
+        csv_buffer2.seek(0)
+        bucket.blob(storage_path2).upload_from_file(csv_buffer2, content_type='text/csv')
 
-        # Create or update DataFrame record
-        if existing_df:
-            # Update existing DataFrame record
-            existing_df.row_count = len(result_df)
-            existing_df.column_count = len(result_df.columns)
-            existing_df.updated_at = datetime.now(timezone.utc)
-            df_record = existing_df
-            db.session.add(existing_df)  # Add existing record to session
+        metadata2 = {
+            'tableName': output_table_name2,
+            'description': f'Reconciliation RIGHT result of {source_dfs[1].name}',
+            'sourceFileId': source_dfs[1].id,
+            'columns': [
+                {'name': col, 'type': str(df_right[col].dtype)} for col in df_right.columns
+            ],
+            'summary': {
+                'nullCounts': df_right.isnull().sum().to_dict(),
+                'uniqueCounts': df_right.nunique().to_dict()
+            }
+        }
+        metadata_path2 = f"{email}/process/{process_id}/metadata/{output_table_name2}.json"
+        bucket.blob(metadata_path2).upload_from_string(json.dumps(metadata2), content_type='application/json')
+
+        # Create or update DataFrame records
+        if existing_df_1:
+            existing_df_1.row_count = len(df_left)
+            existing_df_1.column_count = len(df_left.columns)
+            existing_df_1.updated_at = datetime.now(timezone.utc)
+            df_record1 = existing_df_1
+            db.session.add(existing_df_1)
         else:
-            # Create new DataFrame record
-            df_record = DataFrame.create_from_pandas(
-                df=result_df,
+            df_record1 = DataFrame.create_from_pandas(
+                df=df_left,
                 process_id=process_id,
-                name=output_table_name,
+                name=output_table_name1,
                 email=email,
-                storage_path=storage_path,
+                storage_path=storage_path1,
                 user_id=source_dfs[0].user_id
             )
-            db.session.add(df_record)  # Add new record to session
+            db.session.add(df_record1)
 
-        # Commit the changes
+        if existing_df_2:
+            existing_df_2.row_count = len(df_right)
+            existing_df_2.column_count = len(df_right.columns)
+            existing_df_2.updated_at = datetime.now(timezone.utc)
+            df_record2 = existing_df_2
+            db.session.add(existing_df_2)
+        else:
+            df_record2 = DataFrame.create_from_pandas(
+                df=df_right,
+                process_id=process_id,
+                name=output_table_name2,
+                email=email,
+                storage_path=storage_path2,
+                user_id=source_dfs[1].user_id
+            )
+            db.session.add(df_record2)
+
         db.session.commit()
 
         return {
             'success': True,
-            'storage_path': storage_path,
-            'row_count': len(result_df),
-            'column_count': len(result_df.columns),
+            'storage_path_left': storage_path1,
+            'storage_path_right': storage_path2,
+            'row_count_left': len(df_left),
+            'row_count_right': len(df_right),
+            'column_count_left': len(df_left.columns),
+            'column_count_right': len(df_right.columns),
             'statistics': {
-                'matched_count': len(df_left[df_left['Reco_Status'] == 'Matched']),
-                'unmatched_count': len(df_left[df_left['Reco_Status'].isna()]),
+                'matched_count_left': len(df_left[df_left['Reco_Status'] == 'Matched']) if 'Reco_Status' in df_left.columns else None,
+                'matched_count_right': len(df_right[df_right['Reco_Status'] == 'Matched']) if 'Reco_Status' in df_right.columns else None,
+                'unmatched_count_left': len(df_left[df_left['Reco_Status'].isna()]) if 'Reco_Status' in df_left.columns else None,
+                'unmatched_count_right': len(df_right[df_right['Reco_Status'].isna()]) if 'Reco_Status' in df_right.columns else None,
                 'source_tables': [
                     {'id': df.id, 'name': df.name, 'row_count': len(read_dataframe(df))}
                     for df in source_dfs

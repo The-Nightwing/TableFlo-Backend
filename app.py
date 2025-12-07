@@ -714,6 +714,8 @@ def process_natural_language():
             print(f"[DEBUG] Settings: {json.dumps(result['parameters'].get('settings', {}), indent=2)}")
             print(f"[DEBUG] Cross reference: {json.dumps(result['parameters'].get('crossReference', {}), indent=2)}")
 
+            output_table_name1 = result["parameters"].get("outputTableName1") or f"{output_table_name}_left"
+            output_table_name2 = result["parameters"].get("outputTableName2") or f"{output_table_name}_right"
             operation_result = process_dataframe_reconciliation(
                 email=email,
                 process_id=data["process_id"],
@@ -722,8 +724,10 @@ def process_natural_language():
                 values=values,
                 settings=result["parameters"].get('settings', {}),
                 cross_reference=result["parameters"].get('crossReference', {}),
-                output_table_name=output_table_name,
-                existing_df=None
+                output_table_name1=output_table_name1,
+                output_table_name2=output_table_name2,
+                existing_df_1=None,
+                existing_df_2=None
             )
             print(f"[DEBUG] Reconcile operation result: {operation_result}")
 
@@ -746,16 +750,22 @@ def process_natural_language():
                 
                 # Fetch fresh metadata from storage after operation
                 try:
-                    output_name = data.get("output_table_name")
-                    metadata_path = f"{email}/process/{data['process_id']}/metadata/{output_name}.json"
-                    metadata_blob = bucket.blob(metadata_path)
-                    if metadata_blob.exists():
-                        updated_metadata = json.loads(metadata_blob.download_as_string())
+                    metadata_path1 = f"{email}/process/{data['process_id']}/metadata/{output_table_name1}.json"
+                    metadata_blob1 = bucket.blob(metadata_path1)
+                    if metadata_blob1.exists():
+                        updated_metadata1 = json.loads(metadata_blob1.download_as_string())
                     else:
-                        updated_metadata = None
+                        updated_metadata1 = None
+                    metadata_path2 = f"{email}/process/{data['process_id']}/metadata/{output_table_name2}.json"
+                    metadata_blob2 = bucket.blob(metadata_path2)
+                    if metadata_blob2.exists():
+                        updated_metadata2 = json.loads(metadata_blob2.download_as_string())
+                    else:
+                        updated_metadata2 = None
                 except Exception as e:
                     print(f"[DEBUG] Warning: Could not load updated metadata: {str(e)}")
-                    updated_metadata = None
+                    updated_metadata1 = None
+                    updated_metadata2 = None
                 
                 return jsonify({
                     "success": True,
@@ -764,7 +774,8 @@ def process_natural_language():
                         "sourceTables": [df.name for df in source_dfs],
                         "dataframeId": df_operation.dataframe_id,
                         "message": operation_result.get('message'),
-                        "newTableName": data.get("output_table_name"),
+                        "newTableName1": output_table_name1,
+                        "newTableName2": output_table_name2,
                         "statistics": operation_result.get('statistics'),
                         "aiRequestId": ai_request.id,
                         "retryCount": ai_request.retry_count,
@@ -775,7 +786,10 @@ def process_natural_language():
                     "parameters": result["parameters"],
                     "metadata_used": result.get("metadata_used"),
                     "domain": result.get("domain"),
-                    "updated_metadata": updated_metadata
+                    "updated_metadata": {
+                        "table1": updated_metadata1,
+                        "table2": updated_metadata2
+                    }
                 })
             else:
                 df_operation.set_error(operation_result.get('error'))
