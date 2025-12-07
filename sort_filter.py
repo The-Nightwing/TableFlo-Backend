@@ -595,7 +595,8 @@ def apply_filter(df, column, operator, value):
             return df[col == val]
         # String or object
         else:
-            return df[col.astype(str) == str(value)]
+            # Case-insensitive comparison
+            return df[col.astype(str).str.lower() == str(value).lower()]
     elif operator == "not_equals":
         col = df[column]
 
@@ -647,7 +648,8 @@ def apply_filter(df, column, operator, value):
             pass
 
         # ---------- STRING FALLBACK ----------
-        return df[col.astype(str) != str(value)]
+        # Case-insensitive comparison
+        return df[col.astype(str).str.lower() != str(value).lower()]
 
     elif operator == "contains":
         return df[df[column].astype(str).str.contains(str(value), case=False, na=False)]
@@ -707,9 +709,11 @@ def apply_filter(df, column, operator, value):
         except:
             return df[pd.to_numeric(df[column], errors='coerce') <= float(value)]
     elif operator == "starts_with":
-        return df[df[column].astype(str).str.startswith(str(value))]
+        # Case-insensitive startswith
+        return df[df[column].astype(str).str.lower().str.startswith(str(value).lower())]
     elif operator == "ends_with":
-        return df[df[column].astype(str).str.endswith(str(value))]
+        # Case-insensitive endswith
+        return df[df[column].astype(str).str.lower().str.endswith(str(value).lower())]
     elif operator == "is_null":
         return df[df[column].isna()]
     elif operator == "is_not_null":
