@@ -17,30 +17,52 @@ from io import BytesIO
 group_pivot_bp = Blueprint('group_pivot', __name__, url_prefix='/api/group-pivot')
 
 def create_pivot_table(df, row_index, column_index, pivot_values):
-    """Create pivot table from DataFrame"""
+    """Create a clean pivot table from DataFrame."""
+
     # Build aggregation dictionary
-    aggfunc = {item['column']: item['aggregation'] for item in pivot_values}
-    
+    aggfunc = {}
+
+    for item in pivot_values:
+        col = item['column']
+        user_agg = item['aggregation']
+
+        # Fix invalid aggregation: SUM on strings
+        if df[col].dtype == 'object' and user_agg == 'sum':
+            aggfunc[col] = 'first'
+        else:
+            aggfunc[col] = user_agg
+
+    # Build pivot table
     pivot_table = pd.pivot_table(
         df,
         index=row_index,
-        columns=column_index if column_index != "None" else None,
+        columns=column_index if column_index not in [None, "None", ""] else None,
         values=[item['column'] for item in pivot_values],
         aggfunc=aggfunc
-    ).reset_index()
+    )
 
-    # Flatten multi-level columns if they exist
+    # ----- CLEAN COLUMN HEADERS -----
+
+    # If pivot has multiindex columns: (value_col, Cust_ID)
     if isinstance(pivot_table.columns, pd.MultiIndex):
-        pivot_table.columns = [
-            "_".join(str(col) for col in (col if isinstance(col, tuple) else (col,))).strip()
-            for col in pivot_table.columns
-        ]
-    
-    # Replace NaN values with 0 for numeric columns
-    numeric_columns = pivot_table.select_dtypes(include=['number']).columns
-    pivot_table[numeric_columns] = pivot_table[numeric_columns].fillna(0)
-    
+        new_cols = []
+        for val_col, col_idx in pivot_table.columns:
+
+            # Example val_col = 'Name', col_idx = 1001
+            # We want column name = "1001" (not "Name_1001")
+            if col_idx is None:  
+                new_cols.append(val_col)  # row index only case
+            else:
+                new_cols.append(str(col_idx))
+
+        pivot_table.columns = new_cols
+
+    # Reset index
+    pivot_table = pivot_table.reset_index()
+
     return pivot_table
+
+
 
 def create_config_data(row_index, column_index, pivot_values):
     """Create configuration data for pivot table"""
