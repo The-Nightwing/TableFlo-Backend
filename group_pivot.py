@@ -40,25 +40,71 @@ def create_pivot_table(df, row_index, column_index, pivot_values):
         values=[item['column'] for item in pivot_values],
         aggfunc=aggfunc
     )
+    # ----- CLEAN & REORDER COLUMN HEADERS -----
 
-    # ----- CLEAN COLUMN HEADERS -----
+    # Build a list of original pivot columns (tuples for MultiIndex, single for Index)
+    original_cols = list(pivot_table.columns)
 
-    # If pivot has multiindex columns: (value_col, Cust_ID)
-    if isinstance(pivot_table.columns, pd.MultiIndex):
-        new_cols = []
-        for val_col, col_idx in pivot_table.columns:
+    # Map original columns to the "clean" name used previously
+    mapped_names = []
+    for col in original_cols:
+        if isinstance(col, tuple):
+            val_col, col_idx = col
+        else:
+            val_col, col_idx = col, None
 
-            # Example val_col = 'Name', col_idx = 1001
-            # We want column name = "1001" (not "Name_1001")
-            if col_idx is None:  
-                new_cols.append(val_col)  # row index only case
-            else:
-                new_cols.append(str(col_idx))
+        if col_idx is None:
+            mapped_names.append(val_col)
+        else:
+            mapped_names.append(str(col_idx))
 
-        pivot_table.columns = new_cols
+    # Determine row index column names (after reset_index these will be the first columns)
+    if isinstance(row_index, (list, tuple)):
+        row_index_cols = list(row_index)
+    elif row_index is None or row_index == []:
+        row_index_cols = []
+    else:
+        row_index_cols = [row_index]
 
-    # Reset index
+    # Build ordered list of mapped column names following the order of pivot_values
+    ordered_value_cols = []
+
+    # For matching, normalize original_cols into tuples (val_col, col_idx)
+    normalized_original = []
+    for col in original_cols:
+        if isinstance(col, tuple):
+            normalized_original.append((col[0], col[1]))
+        else:
+            normalized_original.append((col, None))
+
+    for pv in pivot_values:
+        pv_col = pv.get('column')
+        # Collect all original columns that correspond to this pivot value in original order
+        for (orig_val_col, orig_col_idx), mapped_name in zip(normalized_original, mapped_names):
+            # match by the value column name
+            if str(orig_val_col) == str(pv_col):
+                ordered_value_cols.append(mapped_name)
+
+    # Construct final column list: row index columns first, then ordered value columns.
+    final_columns = list(row_index_cols) + ordered_value_cols
+
+    # Reset index to turn index levels into columns and then attempt to set the new column order/names.
     pivot_table = pivot_table.reset_index()
+
+    # If lengths mismatch (unexpected), fall back to previously computed mapped_names with index columns
+    if len(final_columns) != pivot_table.shape[1]:
+        # Build fallback names: index names (from reset index) + mapped names
+        idx_names = list(pivot_table.columns[:len(row_index_cols)])
+        fallback = []
+        for n in idx_names:
+            fallback.append(n)
+        # Append remaining mapped names (in original order)
+        fallback.extend(mapped_names)
+        # Trim/pad to match actual columns
+        fallback = fallback[:pivot_table.shape[1]]
+        pivot_table.columns = fallback
+    else:
+        pivot_table.columns = final_columns
 
     return pivot_table
 
