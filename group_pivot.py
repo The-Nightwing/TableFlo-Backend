@@ -17,30 +17,98 @@ from io import BytesIO
 group_pivot_bp = Blueprint('group_pivot', __name__, url_prefix='/api/group-pivot')
 
 def create_pivot_table(df, row_index, column_index, pivot_values):
-    """Create pivot table from DataFrame"""
+    """Create a clean pivot table from DataFrame."""
+
     # Build aggregation dictionary
-    aggfunc = {item['column']: item['aggregation'] for item in pivot_values}
-    
+    aggfunc = {}
+
+    for item in pivot_values:
+        col = item['column']
+        user_agg = item['aggregation']
+
+        # Fix invalid aggregation: SUM on strings
+        if df[col].dtype == 'object' and user_agg == 'sum':
+            aggfunc[col] = 'first'
+        else:
+            aggfunc[col] = user_agg
+
+    # Build pivot table
     pivot_table = pd.pivot_table(
         df,
         index=row_index,
-        columns=column_index if column_index != "None" else None,
+        columns=column_index if column_index not in [None, "None", ""] else None,
         values=[item['column'] for item in pivot_values],
         aggfunc=aggfunc
-    ).reset_index()
+    )
+    # ----- CLEAN & REORDER COLUMN HEADERS -----
 
-    # Flatten multi-level columns if they exist
-    if isinstance(pivot_table.columns, pd.MultiIndex):
-        pivot_table.columns = [
-            "_".join(str(col) for col in (col if isinstance(col, tuple) else (col,))).strip()
-            for col in pivot_table.columns
-        ]
-    
-    # Replace NaN values with 0 for numeric columns
-    numeric_columns = pivot_table.select_dtypes(include=['number']).columns
-    pivot_table[numeric_columns] = pivot_table[numeric_columns].fillna(0)
-    
+    # Build a list of original pivot columns (tuples for MultiIndex, single for Index)
+    original_cols = list(pivot_table.columns)
+
+    # Map original columns to the "clean" name used previously
+    mapped_names = []
+    for col in original_cols:
+        if isinstance(col, tuple):
+            val_col, col_idx = col
+        else:
+            val_col, col_idx = col, None
+
+        if col_idx is None:
+            mapped_names.append(val_col)
+        else:
+            mapped_names.append(str(col_idx))
+
+    # Determine row index column names (after reset_index these will be the first columns)
+    if isinstance(row_index, (list, tuple)):
+        row_index_cols = list(row_index)
+    elif row_index is None or row_index == []:
+        row_index_cols = []
+    else:
+        row_index_cols = [row_index]
+
+    # Build ordered list of mapped column names following the order of pivot_values
+    ordered_value_cols = []
+
+    # For matching, normalize original_cols into tuples (val_col, col_idx)
+    normalized_original = []
+    for col in original_cols:
+        if isinstance(col, tuple):
+            normalized_original.append((col[0], col[1]))
+        else:
+            normalized_original.append((col, None))
+
+    for pv in pivot_values:
+        pv_col = pv.get('column')
+        # Collect all original columns that correspond to this pivot value in original order
+        for (orig_val_col, orig_col_idx), mapped_name in zip(normalized_original, mapped_names):
+            # match by the value column name
+            if str(orig_val_col) == str(pv_col):
+                ordered_value_cols.append(mapped_name)
+
+    # Construct final column list: row index columns first, then ordered value columns.
+    final_columns = list(row_index_cols) + ordered_value_cols
+
+    # Reset index to turn index levels into columns and then attempt to set the new column order/names.
+    pivot_table = pivot_table.reset_index()
+
+    # If lengths mismatch (unexpected), fall back to previously computed mapped_names with index columns
+    if len(final_columns) != pivot_table.shape[1]:
+        # Build fallback names: index names (from reset index) + mapped names
+        idx_names = list(pivot_table.columns[:len(row_index_cols)])
+        fallback = []
+        for n in idx_names:
+            fallback.append(n)
+        # Append remaining mapped names (in original order)
+        fallback.extend(mapped_names)
+        # Trim/pad to match actual columns
+        fallback = fallback[:pivot_table.shape[1]]
+        pivot_table.columns = fallback
+    else:
+        pivot_table.columns = final_columns
+
     return pivot_table
+
+
 
 def create_config_data(row_index, column_index, pivot_values):
     """Create configuration data for pivot table"""
