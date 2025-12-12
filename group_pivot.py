@@ -134,10 +134,23 @@ def save_process_pivot_data(email, process_id, pivot_table_name, pivot_df, confi
         data_blob.upload_from_file(df_buffer, content_type='text/csv')
 
         # Save metadata
+        # Build serializable column names and safe column type mapping.
+        # Use positional access (iloc) to avoid cases where pivot_df[col]
+        # returns a DataFrame (happens when column labels are duplicated),
+        # which would not have a single `dtype` attribute.
+        columns_list = [str(c) for c in pivot_df.columns.tolist()]
+        column_types = {}
+        for idx, col_name in enumerate(columns_list):
+            try:
+                col_dtype = pivot_df.iloc[:, idx].dtype
+            except Exception:
+                col_dtype = None
+            column_types[col_name] = str(col_dtype) if col_dtype is not None else 'unknown'
+
         metadata = {
             "type": "pivot_table",
-            "columns": pivot_df.columns.tolist(),
-            "columnTypes": {col: str(pivot_df[col].dtype) for col in pivot_df.columns},
+            "columns": columns_list,
+            "columnTypes": column_types,
             "rowCount": len(pivot_df),
             "configuration": config_data
         }
