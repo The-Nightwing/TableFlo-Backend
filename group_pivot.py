@@ -32,11 +32,19 @@ def create_pivot_table(df, row_index, column_index, pivot_values):
         else:
             aggfunc[col] = user_agg
 
+    # Ensure column_index is a list or None
+    if column_index in [None, "None", ""]:
+        columns_arg = None
+    elif isinstance(column_index, str):
+        columns_arg = [column_index]
+    else:
+        columns_arg = list(column_index)
+
     # Build pivot table
     pivot_table = pd.pivot_table(
         df,
         index=row_index,
-        columns=column_index if column_index not in [None, "None", ""] else None,
+        columns=columns_arg,
         values=[item['column'] for item in pivot_values],
         aggfunc=aggfunc
     )
@@ -49,14 +57,18 @@ def create_pivot_table(df, row_index, column_index, pivot_values):
     mapped_names = []
     for col in original_cols:
         if isinstance(col, tuple):
-            val_col, col_idx = col
+            # For multi-column, col is a tuple of (value_col, col_idx1, col_idx2, ...)
+            val_col = col[0]
+            col_idxs = col[1:]
         else:
-            val_col, col_idx = col, None
+            val_col = col
+            col_idxs = ()
 
-        if col_idx is None:
+        if not col_idxs or all(idx in [None, "None", ""] for idx in col_idxs):
             mapped_names.append(val_col)
         else:
-            mapped_names.append(str(col_idx))
+            # Flatten all column index values into a string, separated by "|"
+            mapped_names.append("|".join(str(idx) for idx in col_idxs if idx not in [None, "None", ""]))
 
     # Determine row index column names (after reset_index these will be the first columns)
     if isinstance(row_index, (list, tuple)):
@@ -444,6 +456,9 @@ def generate_pivot():
         source_table_name = data.get('tableName')
         row_index = data.get('rowIndex', [])
         column_index = data.get('columnIndex', None)
+        # Accept both string and list, always convert to list if not None
+        if column_index not in [None, "None", ""] and not isinstance(column_index, list):
+            column_index = [column_index]
         pivot_values = data.get('pivotValues', [])
         output_table_name = data.get('outputTableName', '').strip()
 
