@@ -10,7 +10,7 @@ from typing_extensions import Annotated
 # Get OpenAI API key from environment variable or config
 def get_openai_api_key():
     """Get OpenAI API key from environment or app config."""
-    return "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"
+    return os.getenv('OPENAI_API_KEY')
     #return os.getenv('OPENAI_API_KEY') or current_app.config.get('OPENAI_API_KEY')
 
 # Argument models for each operation type
