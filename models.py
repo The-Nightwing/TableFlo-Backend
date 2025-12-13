@@ -462,7 +462,7 @@ class DataFrameOperation(db.Model):
     id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
     process_id = db.Column(db.String(36), db.ForeignKey('user_processes.id'), nullable=False)
     dataframe_id = db.Column(db.String(36), db.ForeignKey('dataframes.id'), nullable=False)
-    title  = db.column(db.String(36), nullable=True)
+    title = db.Column(db.String(36), nullable=True)
     
     # Operation type and subtype
     operation_type = db.Column(db.String(50), nullable=False)
