@@ -484,7 +484,7 @@ class DataFrameOperation(db.Model):
     process = db.relationship('UserProcess', backref='dataframe_operations', lazy=True)
     dataframe = db.relationship('DataFrame', backref='operations', lazy=True)
 
-    def __init__(self, process_id, dataframe_id, operation_type, operation_subtype=None, payload=None, message=None):
+    def __init__(self, process_id, dataframe_id, operation_type, operation_subtype=None, payload=None, message=None, title=None):
         self.id = generate_uuid()
         self.process_id = process_id
         self.dataframe_id = dataframe_id
@@ -494,6 +494,7 @@ class DataFrameOperation(db.Model):
         self.payload = payload if isinstance(payload, dict) else {}
         self.status = OperationStatus.IN_PROGRESS.value
         self.message = message
+        self.title = title
 
     def set_success(self):
         """Mark operation as successful"""
@@ -530,7 +531,8 @@ class DataFrameOperation(db.Model):
             'status': self.status,
             'message': self.message,
             'createdAt': self.created_at.isoformat() if self.created_at else None,
-            'updatedAt': self.updated_at.isoformat() if self.updated_at else None
+            'updatedAt': self.updated_at.isoformat() if self.updated_at else None,
+            'title': self.title
         }
 
         # Add payload directly
