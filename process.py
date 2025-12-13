@@ -1430,7 +1430,7 @@ def list_process_operations(process_id):
                 "processId": process_id,
                 "sequence": float(op.sequence),
                 "operationType": op.operation_name,
-                "title": op.title,
+                "title": op.title or df_operation.title or '',
                 "description": op.description or (df_operation.message if df_operation else None),  # Use message from df_operation if available
                 "parameters": op.parameters,
                 "createdAt": op.created_at.isoformat() if op.created_at else None,

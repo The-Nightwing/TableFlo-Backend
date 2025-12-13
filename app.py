@@ -598,7 +598,8 @@ def process_natural_language():
                 operation_type=OperationType.RECONCILE_FILES.value,
                 operation_subtype="reconcile",
                 payload=result["parameters"],
-                message=operation_message
+                message=operation_message,
+                title="Reconcile Tables"
             )
             db.session.add(df_operation)
             db.session.commit()
@@ -884,7 +885,8 @@ def process_natural_language():
                     operation_type=OperationType.ADD_COLUMN.value,
                     operation_subtype=result["parameters"].get("operationType"),
                     payload=result["parameters"],
-                    message=operation_message
+                    message=operation_message,
+                    title="Add Column"
                 )
                 db.session.add(df_operation)
                 db.session.commit()
@@ -1057,14 +1059,15 @@ def process_natural_language():
                 elif not result["parameters"].get("output_table_name"):
                     result["parameters"]["output_table_name"] = f"{data['tableName']}_filtered"
 
-                operation_message = f"Sort/filter on table '{result['parameters'].get('tableName', '')}' to output '{result['parameters'].get('output_table_name', '')}'"
+                operation_message = f"Sort/filter on table '{data['tableName'] or ''}' to output '{result['parameters'].get('output_table_name', '')}'"
                 df_operation = DataFrameOperation(
                     process_id=data["process_id"],
                     dataframe_id=dataframe.id,
                     operation_type=OperationType.SORT_FILTER.value,
                     operation_subtype="sort_filter",
                     payload=result["parameters"],
-                    message=operation_message
+                    message=operation_message,
+                    title="Sort/Filter"
                 )
                 db.session.add(df_operation)
                 db.session.commit()
