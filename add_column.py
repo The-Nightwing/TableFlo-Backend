@@ -132,17 +132,29 @@ def apply_conditional(df, source_column, conditions, residual_value):
 
     return result
 
+
+
+def ensure_capture_group(func):
+    """
+    Decorator to ensure regex pattern has at least one capture group
+    """
+    def wrapper(df, source_column, pattern):
+        processed_pattern = pattern.replace("\\\\", "\\")
+        if not re.search(r'\(.*?\)', processed_pattern):
+            pattern = f'({pattern})'
+        return func(df, source_column, pattern)
+    return wrapper
+@ensure_capture_group
 def apply_pattern(df, source_column, pattern):
     """
     Extract pattern from source column using regex
     """
     try:
-        processed_pattern = pattern.replace("\\\\", "\\")
         # Get all matches but only use the first column
-        re.compile(processed_pattern)
+        re.compile(pattern)
 
         # Extract matches
-        matches = df[source_column].astype(str).str.extract(processed_pattern, expand=True)
+        matches = df[source_column].astype(str).str.extract(pattern, expand=True)
         return matches.iloc[:, 0]  # Return only the first column of matches
     except Exception as e:
         raise ValueError(f"Invalid regex pattern: {str(e)}")
