@@ -81,21 +81,34 @@ def create_pivot_table(df, row_index, column_index, pivot_values):
     # Build ordered list of mapped column names following the order of pivot_values
     ordered_value_cols = []
 
-    # For matching, normalize original_cols into tuples (val_col, col_idx)
+    # For matching, normalize original_cols into tuples (val_col, agg, *col_idxs)
     normalized_original = []
     for col in original_cols:
         if isinstance(col, tuple):
-            normalized_original.append((col[0], col[1]))
+            # MultiIndex: (value_col, aggregation, ...column_index_values)
+            val_col = col[0]
+            agg = col[1] if len(col) > 1 else None
+            col_idxs = col[2:] if len(col) > 2 else ()
+            normalized_original.append((val_col, agg, col_idxs))
         else:
-            normalized_original.append((col, None))
+            normalized_original.append((col, None, ()))
 
     for pv in pivot_values:
         pv_col = pv.get('column')
-        # Collect all original columns that correspond to this pivot value in original order
-        for (orig_val_col, orig_col_idx), mapped_name in zip(normalized_original, mapped_names):
-            # match by the value column name
-            if str(orig_val_col) == str(pv_col):
+        pv_agg = pv.get('aggregation')
+        # For each payload entry, find the first matching column by both column and aggregation
+        found = False
+        for (orig_val_col, orig_agg, orig_col_idxs), mapped_name in zip(normalized_original, mapped_names):
+            if str(orig_val_col) == str(pv_col) and str(orig_agg) == str(pv_agg):
                 ordered_value_cols.append(mapped_name)
+                found = True
+                break
+        if not found:
+            # Fallback: match by column only if aggregation not found (should not happen in normal use)
+            for (orig_val_col, orig_agg, orig_col_idxs), mapped_name in zip(normalized_original, mapped_names):
+                if str(orig_val_col) == str(pv_col):
+                    ordered_value_cols.append(mapped_name)
+                    break
 
     # Construct final column list: row index columns first, then ordered value columns.
     final_columns = list(row_index_cols) + ordered_value_cols
