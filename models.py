@@ -388,12 +388,18 @@ class DataFrame(db.Model):
                 return 'string'
 
         # Convert pandas Series to basic Python types
-        null_counts = {k: int(v) for k, v in df.isnull().sum().items()}
-        unique_counts = {k: int(v) for k, v in df.nunique().items()}
+        # Helper to stringify column names (handles MultiIndex tuples)
+        def stringify_column(col):
+            if isinstance(col, tuple):
+                return '|'.join([str(x) for x in col])
+            return str(col)
+        
+        null_counts = {stringify_column(k): int(v) for k, v in df.isnull().sum().items()}
+        unique_counts = {stringify_column(k): int(v) for k, v in df.nunique().items()}
 
         data_metadata = {
-            'columns': list(df.columns),
-            'columnTypes': {col: get_column_type(df[col]) for col in df.columns},
+            'columns': [stringify_column(col) for col in df.columns],
+            'columnTypes': {stringify_column(col): get_column_type(df[col]) for col in df.columns},
             'summary': {
                 'nullCounts': null_counts,
                 'uniqueCounts': unique_counts
@@ -407,7 +413,8 @@ class DataFrame(db.Model):
                 if isinstance(obj, (pd.Series, pd.DataFrame)):
                     return obj.to_dict()
                 elif isinstance(obj, dict):
-                    return {k: convert_to_basic_types(v) for k, v in obj.items()}
+                    # Stringify all keys to ensure JSON compatibility
+                    return {stringify_column(k): convert_to_basic_types(v) for k, v in obj.items()}
                 elif isinstance(obj, (list, tuple)):
                     return [convert_to_basic_types(item) for item in obj]
                 elif isinstance(obj, (int, float, str, bool, type(None))):

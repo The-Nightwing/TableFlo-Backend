@@ -65,10 +65,13 @@ def create_pivot_table(df, row_index, column_index, pivot_values):
             col_idxs = ()
 
         if not col_idxs or all(idx in [None, "None", ""] for idx in col_idxs):
-            mapped_names.append(val_col)
+            # No column index: just use the value column name
+            mapped_names.append(str(val_col))
         else:
-            # Flatten all column index values into a string, separated by "|"
-            mapped_names.append("|".join(str(idx) for idx in col_idxs if idx not in [None, "None", ""]))
+            # Has column index: combine value column name with column index values
+            # Format: ValueCol|idx1|idx2...
+            idx_str = "|".join(str(idx) for idx in col_idxs if idx not in [None, "None", ""])
+            mapped_names.append(f"{val_col}|{idx_str}")
 
     # Determine row index column names (after reset_index these will be the first columns)
     if isinstance(row_index, (list, tuple)):
@@ -80,56 +83,54 @@ def create_pivot_table(df, row_index, column_index, pivot_values):
 
     # Build ordered list of mapped column names following the order of pivot_values
     ordered_value_cols = []
+    # Also track the original column positions to reorder the DataFrame
+    ordered_original_cols = []
 
-    # For matching, normalize original_cols into tuples (val_col, agg, *col_idxs)
+    # For matching, normalize original_cols into tuples (val_col, *col_idxs)
+    # Note: pandas pivot_table MultiIndex is (value_col, col_idx_value1, col_idx_value2, ...)
+    # The aggregation is NOT part of the column index
     normalized_original = []
     for col in original_cols:
         if isinstance(col, tuple):
-            # MultiIndex: (value_col, aggregation, ...column_index_values)
+            # MultiIndex: (value_col, ...column_index_values)
             val_col = col[0]
-            agg = col[1] if len(col) > 1 else None
-            col_idxs = col[2:] if len(col) > 2 else ()
-            normalized_original.append((val_col, agg, col_idxs))
+            col_idxs = col[1:] if len(col) > 1 else ()
+            normalized_original.append((val_col, col_idxs))
         else:
-            normalized_original.append((col, None, ()))
+            normalized_original.append((col, ()))
 
+    # For each pivot_value entry, collect ALL matching columns (all column index values for that value column)
+    # then append them in the order they appear in the pivot table
     for pv in pivot_values:
         pv_col = pv.get('column')
-        pv_agg = pv.get('aggregation')
-        # For each payload entry, find the first matching column by both column and aggregation
-        found = False
-        for (orig_val_col, orig_agg, orig_col_idxs), mapped_name in zip(normalized_original, mapped_names):
-            if str(orig_val_col) == str(pv_col) and str(orig_agg) == str(pv_agg):
+        # Collect all mapped names that match this value column, preserving their original order
+        for i, ((orig_val_col, orig_col_idxs), mapped_name) in enumerate(zip(normalized_original, mapped_names)):
+            if str(orig_val_col) == str(pv_col):
                 ordered_value_cols.append(mapped_name)
-                found = True
-                break
-        if not found:
-            # Fallback: match by column only if aggregation not found (should not happen in normal use)
-            for (orig_val_col, orig_agg, orig_col_idxs), mapped_name in zip(normalized_original, mapped_names):
-                if str(orig_val_col) == str(pv_col):
-                    ordered_value_cols.append(mapped_name)
-                    break
+                ordered_original_cols.append(original_cols[i])
 
     # Construct final column list: row index columns first, then ordered value columns.
     final_columns = list(row_index_cols) + ordered_value_cols
 
-    # Reset index to turn index levels into columns and then attempt to set the new column order/names.
+    # Reset index to turn index levels into columns
     pivot_table = pivot_table.reset_index()
 
-    # If lengths mismatch (unexpected), fall back to previously computed mapped_names with index columns
-    if len(final_columns) != pivot_table.shape[1]:
-        # Build fallback names: index names (from reset index) + mapped names
-        idx_names = list(pivot_table.columns[:len(row_index_cols)])
-        fallback = []
-        for n in idx_names:
-            fallback.append(n)
-        # Append remaining mapped names (in original order)
-        fallback.extend(mapped_names)
-        # Trim/pad to match actual columns
-        fallback = fallback[:pivot_table.shape[1]]
-        pivot_table.columns = fallback
-    else:
+    # Reorder the DataFrame columns to match the desired order
+    # First, create a mapping of current columns after reset_index
+    current_cols_after_reset = list(pivot_table.columns)
+    
+    # Build the actual column order: row index cols (already in position) + reordered value cols
+    reorder_cols = current_cols_after_reset[:len(row_index_cols)] + ordered_original_cols
+    
+    # Reorder the DataFrame
+    if len(reorder_cols) == pivot_table.shape[1]:
+        pivot_table = pivot_table[reorder_cols]
+        # Now assign the clean names
         pivot_table.columns = final_columns
+    else:
+        # Fallback if something went wrong
+        if len(final_columns) == pivot_table.shape[1]:
+            pivot_table.columns = final_columns
 
     return pivot_table
 
@@ -163,9 +164,17 @@ def save_process_pivot_data(email, process_id, pivot_table_name, pivot_df, confi
         # Use positional access (iloc) to avoid cases where pivot_df[col]
         # returns a DataFrame (happens when column labels are duplicated),
         # which would not have a single `dtype` attribute.
-        columns_list = [str(c) for c in pivot_df.columns.tolist()]
+
+        # Ensure all column names and keys are strings (handles MultiIndex and tuples)
+        def stringify_col(col):
+            if isinstance(col, tuple):
+                return '|'.join([str(x) for x in col])
+            return str(col)
+
+        columns_list = [stringify_col(c) for c in pivot_df.columns.tolist()]
         column_types = {}
-        for idx, col_name in enumerate(columns_list):
+        for idx, col in enumerate(pivot_df.columns.tolist()):
+            col_name = stringify_col(col)
             try:
                 col_dtype = pivot_df.iloc[:, idx].dtype
             except Exception:
