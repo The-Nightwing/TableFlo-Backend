@@ -2012,15 +2012,18 @@ def delete_process(process_id):
         
         # Optimize database cleanup with bulk operations
         try:
-            # Use bulk delete for better performance
+            # First, delete all ProcessOperation rows referencing DataFrameOperation
+            ProcessOperation.query.filter_by(process_id=process.id).delete(synchronize_session=False)
+
+            # Now safe to delete DataFrameOperation and other dependent rows
             DataFrameOperation.query.filter_by(process_id=process.id).delete(synchronize_session=False)
             DataFrameBatchOperation.query.filter_by(process_id=process.id).delete(synchronize_session=False)
             FormattingStep.query.filter_by(process_id=process.id).delete(synchronize_session=False)
-            
+
             # Delete the process (cascade will handle remaining children)
             db.session.delete(process)
             db.session.commit()
-            
+
         except Exception as e:
             db.session.rollback()
             print(f"Error in database cleanup: {str(e)}")
