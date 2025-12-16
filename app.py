@@ -269,6 +269,27 @@ def process_natural_language():
             
             db.session.add(ai_request)
             db.session.commit()
+            
+            # Fetch conversation history for context (last 5 successful AI requests in this process)
+            conversation_history = []
+            try:
+                previous_requests = db.session.query(AIRequest).filter(
+                    AIRequest.process_id == data.get("process_id"),
+                    AIRequest.status == 'success',
+                    AIRequest.id != ai_request.id  # Exclude current request
+                ).order_by(AIRequest.request_time.desc()).limit(5).all()
+                
+                conversation_history = [{
+                    'query': req.query,
+                    'operation_type': req.operation_type,
+                    'response': req.response
+                } for req in reversed(previous_requests)]  # Reverse to get chronological order
+                
+                print(f"[DEBUG] Loaded {len(conversation_history)} previous conversations for context")
+            except Exception as hist_err:
+                print(f"[DEBUG] Failed to load conversation history: {str(hist_err)}")
+                conversation_history = []
+                
         except ValueError as e:
             print(f"[DEBUG] Retry handling failed: {str(e)}")
             # Get the original request to include its details in the response
@@ -455,7 +476,8 @@ def process_natural_language():
                     table_name=data["table1Name"],
                     process_id=data["process_id"],
                     dataframe_metadata=transformed_metadata,
-                    table2_metadata=transformed_metadata2
+                    table2_metadata=transformed_metadata2,
+                    conversation_history=conversation_history
                 )
             except Exception as e:
                 print(f"[DEBUG] Metadata processing error: {str(e)}")
@@ -526,7 +548,8 @@ def process_natural_language():
                 table_name=source_table_names[0],
                 process_id=data["process_id"],
                 dataframe_metadata=transformed_metadata,
-                table2_metadata=transformed_metadata2
+                table2_metadata=transformed_metadata2,
+                conversation_history=conversation_history
             )
             print(f"[DEBUG] Reconciliation result: {result}")
             # Validate column names in the parameters
@@ -852,7 +875,8 @@ def process_natural_language():
                         table_name=data["tableName"],
                         process_id=data["process_id"],
                         dataframe_metadata=transformed_metadata,
-                        table2_metadata=None
+                        table2_metadata=None,
+                        conversation_history=conversation_history
                     )
                     print(f"[DEBUG] Add column result: {result}")
                     if not result.get("success"):
@@ -1034,7 +1058,8 @@ def process_natural_language():
                         table_name=data["tableName"],
                         process_id=data["process_id"],
                         dataframe_metadata=transformed_metadata,
-                        table2_metadata=None
+                        table2_metadata=None,
+                        conversation_history=conversation_history
                     )
 
                     if data["operation_type_new"] == "sort":
@@ -1214,7 +1239,8 @@ def process_natural_language():
                         table_name=data["tableName"],
                         process_id=data["process_id"],
                         dataframe_metadata=transformed_metadata,
-                        table2_metadata=None
+                        table2_metadata=None,
+                        conversation_history=conversation_history
                     )
                     
                     if not result.get("success"):
@@ -1595,7 +1621,8 @@ def process_natural_language():
                         table_name=data["tableName"],
                         process_id=data["process_id"],
                         dataframe_metadata=transformed_metadata,
-                        table2_metadata=None
+                        table2_metadata=None,
+                        conversation_history=conversation_history
                     )
                     
                     if not result.get("success"):
@@ -1772,7 +1799,8 @@ def process_natural_language():
                         table_name=data["tableName"],
                         process_id=data["process_id"],
                         dataframe_metadata=transformed_metadata,
-                        table2_metadata=None
+                        table2_metadata=None,
+                        conversation_history=conversation_history
                     )
                     
                     if not result.get("success"):

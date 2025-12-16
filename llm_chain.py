@@ -610,7 +610,7 @@ class RegexArgs(BaseModel):
     pattern: str = Field(description="The actual regex pattern")
     explanation: str = Field(description="A brief explanation of how the pattern works")
 
-def run_chain(user_input: str, operation_type: str, table_name: str, process_id: str, dataframe_metadata: Dict[str, Any], table2_metadata: Optional[Dict[str, Any]] = None):
+def run_chain(user_input: str, operation_type: str, table_name: str, process_id: str, dataframe_metadata: Dict[str, Any], table2_metadata: Optional[Dict[str, Any]] = None, conversation_history: Optional[List[Dict[str, Any]]] = None):
     """
     Process natural language input with context about the DataFrame(s)
     
@@ -621,6 +621,7 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
         process_id: ID of the process
         dataframe_metadata: Metadata about the first DataFrame
         table2_metadata: Metadata about the second DataFrame (for merge operations)
+        conversation_history: List of previous queries and responses for context
     """
     try:
         import time
@@ -662,14 +663,24 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
             ])
         
         # Create operation-specific prompt template
-        prompt_template = create_operation_prompt(operation_type, df_meta, df2_meta)
+        prompt_template = create_operation_prompt(operation_type, df_meta, df2_meta, conversation_history)
         
         # Create chain with appropriate parser
         chain = create_chain(operation_type, prompt_template)
         
+        # Build conversation context string if history exists
+        conversation_context = ""
+        if conversation_history:
+            conversation_context = "\n\nPrevious conversation:\n"
+            for i, entry in enumerate(conversation_history[-3:], 1):  # Last 3 interactions only
+                conversation_context += f"\n{i}. User: {entry.get('query', '')}\n"
+                if entry.get('response'):
+                    params = entry['response'].get('parameters', {})
+                    conversation_context += f"   AI understood: {params}\n"
+        
         # Add context to user input
         context_input = {
-            "user_input": user_input,
+            "user_input": user_input + conversation_context,
             "tableName": table_name,
             "column_info": column_info,
             "column_count": len(df_meta.columns),
@@ -751,7 +762,7 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
             "error": f"Error processing request: {str(e)}"
         }
 
-def create_operation_prompt(operation_type: str, df_meta: DataFrameMetadata, df2_meta: Optional[DataFrameMetadata] = None) -> PromptTemplate:
+def create_operation_prompt(operation_type: str, df_meta: DataFrameMetadata, df2_meta: Optional[DataFrameMetadata] = None, conversation_history: Optional[List[Dict[str, Any]]] = None) -> PromptTemplate:
     """Create operation-specific prompt template"""
     
     parser = PydanticOutputParser(pydantic_object=FunctionCall)
