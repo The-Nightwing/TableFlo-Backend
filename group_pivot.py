@@ -13,6 +13,7 @@ from models import (
     OperationType,
 )
 from io import BytesIO
+import io
 
 group_pivot_bp = Blueprint('group_pivot', __name__, url_prefix='/api/group-pivot')
 
@@ -251,6 +252,21 @@ def process_pivot_table(
 
         # Convert to DataFrame
         df = pd.DataFrame(source_data['data'])
+
+        # Validate that math functions are not applied to string columns
+        math_aggs = {'sum', 'mean', 'median', 'min', 'max', 'std', 'var'}
+        sample_bytes = source_blob.download_as_bytes()
+        df = pd.read_csv(io.BytesIO(sample_bytes), nrows=10)
+        for pv in pivot_values:
+            col = pv.get('column')
+            agg = pv.get('aggregation')
+            if agg in math_aggs and col in df.columns:
+                if str(df[col].dtype) == 'object':
+                    return {
+                        "success": False,
+                        "error": f"The function '{agg}' cannot be applied to text field '{col}'. This function cannot be applied to a text field."
+                    }
+
 
         # Create pivot table
         pivot_df = create_pivot_table(df, row_index, column_index, pivot_values)
