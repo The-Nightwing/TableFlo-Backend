@@ -799,7 +799,7 @@ def process_sort_filter_data(email, process_id, source_df, sort_config, filter_c
         # Apply sorting
         if sort_config:
             columns = [rule['column'] for rule in sort_config]
-            ascending = [rule.get('direction', 'asc') == 'asc' for rule in sort_config]
+            ascending = [rule.get('direction', rule.get('order', 'asc')) == 'asc' for rule in sort_config]
             df = df.sort_values(by=columns, ascending=ascending)
 
         # Generate storage paths
