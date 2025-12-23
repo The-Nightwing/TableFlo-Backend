@@ -1,11 +1,14 @@
 import os
+from flask import jsonify
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import PydanticOutputParser
-from pydantic import BaseModel, Field, model_validator, field_validator, ConfigDict, ValidationInfo
+from pydantic import BaseModel, Field, model_validator, field_validator, ConfigDict, ValidationInfo, ValidationError
 from langchain_community.chat_models import ChatOpenAI
 from typing import Optional, List, Dict, Any, Union
 import datetime
 from typing_extensions import Annotated
+
+PROMPT_INCOMPLETE_MESSAGE = "The prompt does not contain all required parameters to complete the operation."
 
 # Get OpenAI API key from environment variable or config
 def get_openai_api_key():
@@ -756,11 +759,33 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
             },
             "domain": domain_info.model_dump()
         }
-    except Exception as e:
-        return {
+    except ValidationError as exc:
+        print(f"[DEBUG] run_chain validation error: {exc}")
+        return jsonify({
             "success": False,
-            "error": f"Error processing request: {str(e)}"
-        }
+            "error": PROMPT_INCOMPLETE_MESSAGE
+        }), 409
+    except Exception as e:
+        error_message = str(e)
+        print(f"[DEBUG] run_chain error: {error_message}")
+        lower_message = error_message.lower()
+        incomplete_keywords = [
+            "field required",
+            "missing",
+            "must provide",
+            "must specify",
+            "required parameter",
+            "required field"
+        ]
+        if any(keyword in lower_message for keyword in incomplete_keywords):
+            friendly_error = PROMPT_INCOMPLETE_MESSAGE
+        else:
+            friendly_error = f"Error processing request: {error_message}"
+
+        return jsonify({
+            "success": False,
+            "error": friendly_error
+        }), 409
 
 def create_operation_prompt(operation_type: str, df_meta: DataFrameMetadata, df2_meta: Optional[DataFrameMetadata] = None, conversation_history: Optional[List[Dict[str, Any]]] = None) -> PromptTemplate:
     """Create operation-specific prompt template"""

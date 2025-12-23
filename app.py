@@ -17,6 +17,9 @@ from file_operations import process_dataframe_operations
 from formatting import process_dataframe_formatting
 from firebase_config import get_storage_bucket
 from io import BytesIO
+import copy
+
+COLUMN_NOT_FOUND_MESSAGE = "The specified column name(s) could not be found."
 
 nlp_bp = Blueprint('nlp', __name__, url_prefix='/api/nlp')
 
@@ -183,12 +186,56 @@ def convert_table_names_to_fields(data):
             
     return data
 
+def normalize_operation_type(operation_type: str) -> str:
+    if not operation_type:
+        return ""
+    return operation_type.replace("_", "-").lower()
+
+
+def deep_merge_parameters(base: dict, updates: dict) -> dict:
+    if base is None and updates is None:
+        return {}
+    if base is None:
+        return copy.deepcopy(updates)
+    if updates is None:
+        return copy.deepcopy(base)
+
+    merged = copy.deepcopy(base)
+    for key, value in updates.items():
+        if value is None:
+            continue
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge_parameters(merged.get(key), value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def merge_with_previous_parameters(current_operation: str, result: dict, previous_operation: str, previous_parameters: dict) -> dict:
+    if not result or not previous_parameters:
+        return result
+
+    if normalize_operation_type(current_operation) != normalize_operation_type(previous_operation):
+        return result
+
+    current_params = result.get("parameters")
+    if not current_params:
+        result["parameters"] = copy.deepcopy(previous_parameters)
+        return result
+
+    result["parameters"] = deep_merge_parameters(previous_parameters, current_params)
+    return result
+
 @nlp_bp.route("/process", methods=["POST"])
 def process_natural_language():
     """Process natural language query with DataFrame context"""
     # Initialize variables at the top level
     ai_request = None
     result = None
+    previous_request_query = None
+    previous_request_context = None
+    previous_operation_type = None
+    previous_request_parameters = None
     
     try:
         print("[DEBUG] Starting process_natural_language endpoint")
@@ -225,6 +272,15 @@ def process_natural_language():
                 ).first()
                 
                 if ai_request:
+                    previous_request_query = ai_request.query
+                    if ai_request.response:
+                        previous_request_context = {
+                            'query': ai_request.query,
+                            'operation_type': ai_request.operation_type,
+                            'response': ai_request.response
+                        }
+                        previous_operation_type = ai_request.operation_type
+                        previous_request_parameters = (ai_request.response or {}).get('parameters')
                     # Update existing request for retry
                     if ai_request.retry_count >= ai_request.max_retries:
                         raise ValueError(f"Maximum retry limit ({ai_request.max_retries}) reached for request {original_request_id}")
@@ -285,6 +341,8 @@ def process_natural_language():
                     'response': req.response
                 } for req in reversed(previous_requests)]  # Reverse to get chronological order
                 
+                if previous_request_context:
+                    conversation_history.append(previous_request_context)
                 print(f"[DEBUG] Loaded {len(conversation_history)} previous conversations for context")
             except Exception as hist_err:
                 print(f"[DEBUG] Failed to load conversation history: {str(hist_err)}")
@@ -316,6 +374,22 @@ def process_natural_language():
         # Ensure ai_request is available for the rest of the function
         if not ai_request:
             return jsonify({"error": "Failed to initialize AI request"}), 500
+
+        user_query = data.get("query", "")
+        if ai_request:
+            ai_request.query = user_query
+            ai_request.operation_type = data.get('operation_type')
+            ai_request.table_name = data.get('tableName')
+            ai_request.second_table_name = data.get('table2Name')
+            try:
+                db.session.flush()
+            except Exception as update_err:
+                print(f"[DEBUG] Failed to persist updated AI request context: {update_err}")
+                db.session.rollback()
+
+        validation_query = user_query
+        if original_request_id and previous_request_query:
+            validation_query = f"{previous_request_query}\nFollow-up: {user_query}"
 
         # Validate required fields based on operation type
         if data.get("operation_type") in ["merge-files", "merge_files"]:
@@ -462,7 +536,7 @@ def process_natural_language():
                 transformed_metadata2 = transform_metadata(metadata2) if metadata2 else None
 
                 # Validate intent once using centralized helper
-                err = validate_intent_or_abort(data.get("query", ""), operation_type, transformed_metadata)
+                err = validate_intent_or_abort(validation_query, operation_type, transformed_metadata)
                 if err:
                     # Return a concise, actionable error including the user's query and the requested operation
                     return jsonify({
@@ -478,6 +552,12 @@ def process_natural_language():
                     dataframe_metadata=transformed_metadata,
                     table2_metadata=transformed_metadata2,
                     conversation_history=conversation_history
+                )
+                result = merge_with_previous_parameters(
+                    operation_type,
+                    result,
+                    previous_operation_type,
+                    previous_request_parameters
                 )
             except Exception as e:
                 print(f"[DEBUG] Metadata processing error: {str(e)}")
@@ -534,7 +614,7 @@ def process_natural_language():
             transformed_metadata2 = transform_metadata(metadata2) if metadata2 else None
 
             # Validate intent once using centralized helper
-            err = validate_intent_or_abort(data.get("query", ""), "reconcile", transformed_metadata)
+            err = validate_intent_or_abort(validation_query, "reconcile", transformed_metadata)
             if err:
                 # Return a concise, actionable error including the user's query and the requested operation
                 return jsonify({
@@ -550,6 +630,12 @@ def process_natural_language():
                 dataframe_metadata=transformed_metadata,
                 table2_metadata=transformed_metadata2,
                 conversation_history=conversation_history
+            )
+            result = merge_with_previous_parameters(
+                data["operation_type"],
+                result,
+                previous_operation_type,
+                previous_request_parameters
             )
             print(f"[DEBUG] Reconciliation result: {result}")
             # Validate column names in the parameters
@@ -579,39 +665,45 @@ def process_natural_language():
                 for key in result["parameters"].get("keys", []):
                     if isinstance(key, dict):
                         if key.get('left') not in actual_columns1:
+                            print(f"[DEBUG] Missing left key column '{key.get('left')}' in first table columns: {actual_columns1}")
                             return jsonify({
-                                "error": f"Column '{key.get('left')}' not found in first table. Available columns: {actual_columns1}"
-                            }), 400
+                                "error": COLUMN_NOT_FOUND_MESSAGE
+                            }), 409
                         if key.get('right') not in actual_columns2:
+                            print(f"[DEBUG] Missing right key column '{key.get('right')}' in second table columns: {actual_columns2}")
                             return jsonify({
-                                "error": f"Column '{key.get('right')}' not found in second table. Available columns: {actual_columns2}"
-                            }), 400
+                                "error": COLUMN_NOT_FOUND_MESSAGE
+                            }), 409
 
                 # Validate values
                 for value in result["parameters"].get("values", []):
                     if isinstance(value, dict):
                         if value.get('left') not in actual_columns1:
+                            print(f"[DEBUG] Missing left value column '{value.get('left')}' in first table columns: {actual_columns1}")
                             return jsonify({
-                                "error": f"Column '{value.get('left')}' not found in first table. Available columns: {actual_columns1}"
-                            }), 400
+                                "error": COLUMN_NOT_FOUND_MESSAGE
+                            }), 409
                         if value.get('right') not in actual_columns2:
+                            print(f"[DEBUG] Missing right value column '{value.get('right')}' in second table columns: {actual_columns2}")
                             return jsonify({
-                                "error": f"Column '{value.get('right')}' not found in second table. Available columns: {actual_columns2}"
-                            }), 400
+                                "error": COLUMN_NOT_FOUND_MESSAGE
+                            }), 409
 
                 # Validate cross-reference columns
                 cross_reference = result["parameters"].get("crossReference", {})
                 if isinstance(cross_reference, dict):
                     for ref in cross_reference.get("left", []):
                         if ref not in actual_columns1:
+                            print(f"[DEBUG] Missing cross-reference column '{ref}' in first table columns: {actual_columns1}")
                             return jsonify({
-                                "error": f"Cross-reference column '{ref}' not found in first table. Available columns: {actual_columns1}"
-                            }), 400
+                                "error": COLUMN_NOT_FOUND_MESSAGE
+                            }), 409
                     for ref in cross_reference.get("right", []):
                         if ref not in actual_columns2:
+                            print(f"[DEBUG] Missing cross-reference column '{ref}' in second table columns: {actual_columns2}")
                             return jsonify({
-                                "error": f"Cross-reference column '{ref}' not found in second table. Available columns: {actual_columns2}"
-                            }), 400
+                                "error": COLUMN_NOT_FOUND_MESSAGE
+                            }), 409
 
             # Create DataFrameOperation record
             operation_message = f"Reconciling tables {request_source_table_names} with output '{output_table_name}'"
@@ -693,41 +785,45 @@ def process_natural_language():
             # Validate that all column names exist in their respective tables
             for key in keys:
                 if key['left'] not in actual_columns1:
-                    error_msg = f"Key column '{key['left']}' not found in first table. Available columns: {actual_columns1}"
-                    df_operation.set_error(error_msg)
+                    detailed_error = f"Key column '{key['left']}' not found in first table. Available columns: {actual_columns1}"
+                    print(f"[DEBUG] {detailed_error}")
+                    df_operation.set_error(detailed_error)
                     db.session.commit()
                     return jsonify({
                         "success": False,
-                        "error": error_msg,
+                        "error": COLUMN_NOT_FOUND_MESSAGE,
                         "operationId": df_operation.id
                     }), 400
                 if key['right'] not in actual_columns2:
-                    error_msg = f"Key column '{key['right']}' not found in second table. Available columns: {actual_columns2}"
-                    df_operation.set_error(error_msg)
+                    detailed_error = f"Key column '{key['right']}' not found in second table. Available columns: {actual_columns2}"
+                    print(f"[DEBUG] {detailed_error}")
+                    df_operation.set_error(detailed_error)
                     db.session.commit()
                     return jsonify({
                         "success": False,
-                        "error": error_msg,
+                        "error": COLUMN_NOT_FOUND_MESSAGE,
                         "operationId": df_operation.id
                     }), 400
 
             for value in values:
                 if value['left'] not in actual_columns1:
-                    error_msg = f"Value column '{value['left']}' not found in first table. Available columns: {actual_columns1}"
-                    df_operation.set_error(error_msg)
+                    detailed_error = f"Value column '{value['left']}' not found in first table. Available columns: {actual_columns1}"
+                    print(f"[DEBUG] {detailed_error}")
+                    df_operation.set_error(detailed_error)
                     db.session.commit()
                     return jsonify({
                         "success": False,
-                        "error": error_msg,
+                        "error": COLUMN_NOT_FOUND_MESSAGE,
                         "operationId": df_operation.id
                     }), 400
                 if value['right'] not in actual_columns2:
-                    error_msg = f"Value column '{value['right']}' not found in second table. Available columns: {actual_columns2}"
-                    df_operation.set_error(error_msg)
+                    detailed_error = f"Value column '{value['right']}' not found in second table. Available columns: {actual_columns2}"
+                    print(f"[DEBUG] {detailed_error}")
+                    df_operation.set_error(detailed_error)
                     db.session.commit()
                     return jsonify({
                         "success": False,
-                        "error": error_msg,
+                        "error": COLUMN_NOT_FOUND_MESSAGE,
                         "operationId": df_operation.id
                     }), 400
 
@@ -861,7 +957,7 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
-                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
+                    err = validate_intent_or_abort(validation_query, data["operation_type"], transformed_metadata)
                     if err:
                         # Return a concise, actionable error including the user's query and the requested operation
                         return jsonify({
@@ -877,6 +973,36 @@ def process_natural_language():
                         dataframe_metadata=transformed_metadata,
                         table2_metadata=None,
                         conversation_history=conversation_history
+                    )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
                     )
                     print(f"[DEBUG] Add column result: {result}")
                     if not result.get("success"):
@@ -1044,7 +1170,7 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
-                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
+                    err = validate_intent_or_abort(validation_query, data["operation_type"], transformed_metadata)
                     if err:
                         # Return a concise, actionable error including the user's query and the requested operation
                         return jsonify({
@@ -1225,7 +1351,7 @@ def process_natural_language():
                     
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
-                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
+                    err = validate_intent_or_abort(validation_query, data["operation_type"], transformed_metadata)
                     if err:
                         # Return a concise, actionable error including the user's query and the requested operation
                         return jsonify({
@@ -1417,7 +1543,7 @@ def process_natural_language():
                         transformed_metadata2 = transform_metadata(metadata2)
                         
                         # Single centralized validation before generating merge parameters
-                        err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata1)
+                        err = validate_intent_or_abort(validation_query, data["operation_type"], transformed_metadata1)
                         if err:
                             # Return a concise, actionable error including the user's query and the requested operation
                             return jsonify({
@@ -1432,6 +1558,12 @@ def process_natural_language():
                             process_id=data["process_id"],
                             dataframe_metadata=transformed_metadata1,
                             table2_metadata=transformed_metadata2
+                        )
+                        result = merge_with_previous_parameters(
+                            data["operation_type"],
+                            result,
+                            previous_operation_type,
+                            previous_request_parameters
                         )
                         
                         if not result or not result.get("parameters"):
@@ -1607,7 +1739,7 @@ def process_natural_language():
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
                     
-                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
+                    err = validate_intent_or_abort(validation_query, data["operation_type"], transformed_metadata)
                     if err:
                         # Return a concise, actionable error including the user's query and the requested operation
                         return jsonify({
@@ -1785,7 +1917,7 @@ def process_natural_language():
                     # Transform metadata before using it
                     transformed_metadata = transform_metadata(metadata)
                     
-                    err = validate_intent_or_abort(data.get("query", ""), data["operation_type"], transformed_metadata)
+                    err = validate_intent_or_abort(validation_query, data["operation_type"], transformed_metadata)
                     if err:
                         # Return a concise, actionable error including the user's query and the requested operation
                         return jsonify({
