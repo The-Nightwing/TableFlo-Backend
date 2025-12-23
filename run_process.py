@@ -340,7 +340,10 @@ def execute_process_run(process_id):
 
         # Execute operations and collect results
         execution_results = []
+        critical_error = None
         for op in operations:
+            if critical_error:
+                break
             operation_result = {
                 "sequence": float(op.sequence),
                 "operation_name": op.operation_name,
@@ -515,6 +518,7 @@ def execute_process_run(process_id):
                             "status": "error",
                             "error": f"Add column operation failed: {str(e)}"
                         })
+                        errors += 1
 
                 elif op.operation_name == 'merge_files':
                     try:
@@ -612,6 +616,7 @@ def execute_process_run(process_id):
                             "status": "error",
                             "error": f"Merge operation failed: {str(e)}"
                         })
+                        errors += 1
 
                 elif op.operation_name in ['group_pivot', 'sort_filter', 'replace_rename_reorder']:
                     try:
@@ -709,6 +714,7 @@ def execute_process_run(process_id):
                             "status": "error",
                             "error": f"{op.operation_name} operation failed: {str(e)}"
                         })
+                        errors += 1
 
                 elif op.operation_name == 'reconcile_files':
                     try:
@@ -803,11 +809,21 @@ def execute_process_run(process_id):
                 # Update execution results
                 execution_results.append(operation_result)
 
+                if operation_result.get("status") == "error" and not critical_error:
+                    critical_error = {
+                        "operationSequence": float(op.sequence),
+                        "operationType": op.operation_name,
+                        "message": operation_result.get('error') or "Unknown error"
+                    }
+
                 # After each operation, update the process run with new mappings
                 process_run.dataframe_mappings = {'run_dataframes': dataframe_mappings}
                 db.session.commit()
                 
                 print(f"Updated mappings after operation {op.sequence}:", dataframe_mappings)
+
+                if critical_error:
+                    break
 
             except Exception as e:
                 print(f"Unexpected error in operation execution: {str(e)}")
@@ -817,6 +833,32 @@ def execute_process_run(process_id):
                 })
                 errors += 1
                 execution_results.append(operation_result)
+                if not critical_error:
+                    critical_error = {
+                        "operationSequence": float(op.sequence),
+                        "operationType": op.operation_name,
+                        "message": str(e)
+                    }
+                break
+
+        if critical_error:
+            operation_name = critical_error.get('operationType') if isinstance(critical_error, dict) else None
+            base_error_message = critical_error.get('message') if isinstance(critical_error, dict) else str(critical_error)
+            customer_error = f"{operation_name}: {base_error_message}" if operation_name else base_error_message
+            return jsonify({
+                "success": False,
+                "message": "Process execution stopped due to an error",
+                "error": customer_error,
+                "errorDetails": critical_error,
+                "execution_results": execution_results,
+                "operations_summary": {
+                    "total_operations": total_operations,
+                    "completed": completed,
+                    "errors": errors,
+                    "skipped": skipped,
+                    "success_rate": f"{(completed/total_operations)*100:.2f}%" if total_operations > 0 else "0%"
+                }
+            }), 409
 
         # After all operations are complete, execute formatting steps
         formatting_results = []
