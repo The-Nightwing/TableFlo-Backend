@@ -226,6 +226,174 @@ def merge_with_previous_parameters(current_operation: str, result: dict, previou
     result["parameters"] = deep_merge_parameters(previous_parameters, current_params)
     return result
 
+
+def _check_column(column_name: str, available_columns: set, missing: set):
+    if not column_name:
+        return
+    if isinstance(column_name, str) and column_name not in available_columns:
+        missing.add(column_name)
+
+
+def find_missing_columns_for_add_column(params: dict, available_columns: set):
+    if not params:
+        return set()
+
+    available_set = available_columns or set()
+    missing = set()
+
+    op_type = params.get("operationType")
+    source_column = params.get("sourceColumn")
+    _check_column(source_column, available_set, missing)
+
+    if op_type == "calculate":
+        for step in params.get("operations", []) or []:
+            _check_column(step.get("column1"), available_set, missing)
+            col2 = step.get("column2")
+            if isinstance(col2, str):
+                _check_column(col2, available_set, missing)
+    elif op_type == "concatenate":
+        for step in params.get("operations", []) or []:
+            if step.get("type") == "Full text":
+                continue
+            _check_column(step.get("column"), available_set, missing)
+    elif op_type == "conditional":
+        for condition in params.get("conditions", []) or []:
+            _check_column(condition.get("column"), available_set, missing)
+
+    return missing
+
+
+def find_missing_columns_for_sort_filter(params: dict, available_columns: set):
+    missing = set()
+    if not params:
+        return missing
+
+    available_set = available_columns or set()
+    for cfg in params.get("sort_config", []) or []:
+        _check_column(cfg.get("column"), available_set, missing)
+    for cfg in params.get("filter_config", []) or []:
+        _check_column(cfg.get("column"), available_set, missing)
+    return missing
+
+
+def find_missing_columns_for_group_pivot(params: dict, available_columns: set):
+    missing = set()
+    if not params:
+        return missing
+
+    available_set = available_columns or set()
+    for col in params.get("rowIndex", []) or []:
+        _check_column(col, available_set, missing)
+    _check_column(params.get("columnIndex"), available_set, missing)
+    for pivot in params.get("pivotValues", []) or []:
+        _check_column(pivot.get("column"), available_set, missing)
+    return missing
+
+
+def find_missing_columns_for_merge(params: dict, columns_table1: set, columns_table2: set):
+    missing = set()
+    if not params:
+        return missing
+
+    available1 = columns_table1 or set()
+    available2 = columns_table2 or set()
+    key_pairs = params.get("keyPairs", []) or []
+    for pair in key_pairs:
+        _check_column(pair.get("left"), available1, missing)
+        _check_column(pair.get("right"), available2, missing)
+    return missing
+
+
+def find_missing_columns_for_reconcile(params: dict, columns_table1: set, columns_table2: set):
+    missing = set()
+    if not params:
+        return missing
+
+    available1 = columns_table1 or set()
+    available2 = columns_table2 or set()
+
+    for key in params.get("keys", []) or []:
+        _check_column(key.get("left"), available1, missing)
+        _check_column(key.get("right"), available2, missing)
+
+    for value in params.get("values", []) or []:
+        _check_column(value.get("left"), available1, missing)
+        _check_column(value.get("right"), available2, missing)
+
+    cross_reference = params.get("crossReference", {}) or {}
+    for ref in cross_reference.get("left", []) or []:
+        _check_column(ref, available1, missing)
+    for ref in cross_reference.get("right", []) or []:
+        _check_column(ref, available2, missing)
+    return missing
+
+
+def find_missing_columns_for_replace(params: dict, available_columns: set):
+    missing = set()
+    if not params:
+        return missing
+
+    available_set = available_columns or set()
+    for operation in params.get("operations", []) or []:
+        op_type = operation.get("type")
+        if op_type == "rename_columns":
+            for col in (operation.get("mapping", {}) or {}).keys():
+                _check_column(col, available_set, missing)
+        elif op_type == "reorder_columns":
+            for col in operation.get("order", []) or []:
+                _check_column(col, available_set, missing)
+        elif op_type == "replace_values":
+            for replacement in operation.get("replacements", []) or []:
+                _check_column(replacement.get("column"), available_set, missing)
+    return missing
+
+
+def find_missing_columns_for_format(params: dict, available_columns: set):
+    missing = set()
+    if not params:
+        return missing
+
+    available_set = available_columns or set()
+    for config in params.get("formattingConfigs", []) or []:
+        location = (config.get("location") or {}).get("range")
+        if location:
+            for token in location.split(","):
+                col_name = token.strip()
+                if not col_name:
+                    continue
+                _check_column(col_name, available_set, missing)
+    return missing
+
+
+def collect_missing_columns(operation_type: str, params: dict, metadata: dict, metadata2: dict = None):
+    normalized = normalize_operation_type(operation_type)
+    columns_table1 = set((metadata or {}).get("columns", []) or [])
+    columns_table2 = set((metadata2 or {}).get("columns", []) or [])
+
+    if normalized == "add-column":
+        return find_missing_columns_for_add_column(params, columns_table1)
+    if normalized == "sort-filter":
+        return find_missing_columns_for_sort_filter(params, columns_table1)
+    if normalized == "group-pivot":
+        return find_missing_columns_for_group_pivot(params, columns_table1)
+    if normalized == "merge-files":
+        return find_missing_columns_for_merge(params, columns_table1, columns_table2)
+    if normalized == "reconcile":
+        return find_missing_columns_for_reconcile(params, columns_table1, columns_table2)
+    if normalized == "replace-rename-reorder":
+        return find_missing_columns_for_replace(params, columns_table1)
+    if normalized == "format":
+        return find_missing_columns_for_format(params, columns_table1)
+    return set()
+
+
+def validate_operation_columns_or_abort(operation_type: str, params: dict, metadata: dict, metadata2: dict = None):
+    missing = collect_missing_columns(operation_type, params, metadata, metadata2)
+    if missing:
+        print(f"[DEBUG] Missing columns for {operation_type}: {sorted(missing)}")
+        return jsonify({"error": COLUMN_NOT_FOUND_MESSAGE}), 409
+    return None
+
 @nlp_bp.route("/process", methods=["POST"])
 def process_natural_language():
     """Process natural language query with DataFrame context"""
@@ -559,6 +727,14 @@ def process_natural_language():
                     previous_operation_type,
                     previous_request_parameters
                 )
+                column_validation_error = validate_operation_columns_or_abort(
+                    operation_type,
+                    result.get("parameters"),
+                    transformed_metadata,
+                    transformed_metadata2
+                )
+                if column_validation_error:
+                    return column_validation_error
             except Exception as e:
                 print(f"[DEBUG] Metadata processing error: {str(e)}")
                 return jsonify({"error": f"Invalid metadata format: {str(e)}"}), 500
@@ -637,6 +813,14 @@ def process_natural_language():
                 previous_operation_type,
                 previous_request_parameters
             )
+            column_validation_error = validate_operation_columns_or_abort(
+                data["operation_type"],
+                result.get("parameters"),
+                transformed_metadata,
+                transformed_metadata2
+            )
+            if column_validation_error:
+                return column_validation_error
             print(f"[DEBUG] Reconciliation result: {result}")
             # Validate column names in the parameters
             if result.get("parameters"):
@@ -980,30 +1164,13 @@ def process_natural_language():
                         previous_operation_type,
                         previous_request_parameters
                     )
-                    result = merge_with_previous_parameters(
+                    column_validation_error = validate_operation_columns_or_abort(
                         data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
+                        result.get("parameters"),
+                        transformed_metadata
                     )
-                    result = merge_with_previous_parameters(
-                        data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
-                    )
-                    result = merge_with_previous_parameters(
-                        data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
-                    )
-                    result = merge_with_previous_parameters(
-                        data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
-                    )
+                    if column_validation_error:
+                        return column_validation_error
                     print(f"[DEBUG] Add column result: {result}")
                     if not result.get("success"):
                         print(f"[DEBUG] run_chain error: {result.get('error')}")
@@ -1187,6 +1354,19 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
+                    column_validation_error = validate_operation_columns_or_abort(
+                        data["operation_type"],
+                        result.get("parameters"),
+                        transformed_metadata
+                    )
+                    if column_validation_error:
+                        return column_validation_error
 
                     if data["operation_type_new"] == "sort":
                         print(f"[DEBUG] Sort operation result: {result}")
@@ -1368,6 +1548,19 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
+                    column_validation_error = validate_operation_columns_or_abort(
+                        data["operation_type"],
+                        result.get("parameters"),
+                        transformed_metadata
+                    )
+                    if column_validation_error:
+                        return column_validation_error
                     
                     if not result.get("success"):
                         print(f"[DEBUG] run_chain error: {result.get('error')}")
@@ -1565,6 +1758,14 @@ def process_natural_language():
                             previous_operation_type,
                             previous_request_parameters
                         )
+                        column_validation_error = validate_operation_columns_or_abort(
+                            data["operation_type"],
+                            result.get("parameters"),
+                            transformed_metadata1,
+                            transformed_metadata2
+                        )
+                        if column_validation_error:
+                            return column_validation_error
                         
                         if not result or not result.get("parameters"):
                             return jsonify({"error": "Failed to generate merge parameters"}), 500
@@ -1756,6 +1957,19 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
+                    column_validation_error = validate_operation_columns_or_abort(
+                        data["operation_type"],
+                        result.get("parameters"),
+                        transformed_metadata
+                    )
+                    if column_validation_error:
+                        return column_validation_error
                     
                     if not result.get("success"):
                         print(f"[DEBUG] run_chain error: {result.get('error')}")
@@ -1934,6 +2148,19 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
+                    result = merge_with_previous_parameters(
+                        data["operation_type"],
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
+                    column_validation_error = validate_operation_columns_or_abort(
+                        data["operation_type"],
+                        result.get("parameters"),
+                        transformed_metadata
+                    )
+                    if column_validation_error:
+                        return column_validation_error
                     
                     if not result.get("success"):
                         print(f"[DEBUG] run_chain error: {result.get('error')}")
