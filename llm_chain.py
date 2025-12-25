@@ -10,6 +10,18 @@ from typing_extensions import Annotated
 
 PROMPT_INCOMPLETE_MESSAGE = "The prompt does not contain all required parameters to complete the operation."
 
+
+def is_incomplete_prompt_error(err: Exception) -> bool:
+    """Heuristic: identify pydantic validation failures that indicate missing required fields.
+
+    We intentionally keep this broad and safe: if we can't be sure, return False and let
+    the caller surface the original error.
+    """
+    try:
+        return isinstance(err, ValidationError)
+    except Exception:
+        return False
+
 # Get OpenAI API key from environment variable or config
 def get_openai_api_key():
     """Get OpenAI API key from environment or app config."""
@@ -671,15 +683,29 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
         # Create chain with appropriate parser
         chain = create_chain(operation_type, prompt_template)
         
-        # Build conversation context string if history exists
+        # Build conversation context string if history exists.
+        #
+        # IMPORTANT: We intentionally do NOT merge parameters server-side on follow-up revisions.
+        # Instead, we provide the previous parameters as explicit context and ask the model to
+        # output the FINAL updated parameters.
         conversation_context = ""
         if conversation_history:
-            conversation_context = "\n\nPrevious conversation:\n"
+            conversation_context = (
+                "\n\n=== PREVIOUS CONVERSATION (Use this to understand corrections) ===\n"
+                "IMPORTANT: If the current request corrects or modifies a previous request,\n"
+                "analyze what the user is trying to CHANGE and output the corrected final parameters.\n"
+                "Do NOT treat correction phrases like 'sorry', 'actually', 'instead' as data values.\n\n"
+            )
+
             for i, entry in enumerate(conversation_history[-3:], 1):  # Last 3 interactions only
-                conversation_context += f"\n{i}. User: {entry.get('query', '')}\n"
+                conversation_context += f"\n--- Previous Request #{i} ---\n"
+                conversation_context += f"User said: {entry.get('query', '')}\n"
                 if entry.get('response'):
                     params = entry['response'].get('parameters', {})
-                    conversation_context += f"   AI understood: {params}\n"
+                    conversation_context += f"Generated parameters: {params}\n"
+            
+            conversation_context += "\n=== END OF PREVIOUS CONVERSATION ===\n"
+            conversation_context += "Now process the current request below, applying any corrections from the conversation above:\n\n"
         
         # Add context to user input
         context_input = {
@@ -761,10 +787,11 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
         }
     except ValidationError as exc:
         print(f"[DEBUG] run_chain validation error: {exc}")
-        return jsonify({
+        return {
             "success": False,
-            "error": PROMPT_INCOMPLETE_MESSAGE
-        }), 409
+            "error": PROMPT_INCOMPLETE_MESSAGE,
+            "details": str(exc)
+        }
     except Exception as e:
         error_message = str(e)
         print(f"[DEBUG] run_chain error: {error_message}")
@@ -782,16 +809,29 @@ def run_chain(user_input: str, operation_type: str, table_name: str, process_id:
         else:
             friendly_error = f"Error processing request: {error_message}"
 
-        return jsonify({
+        return {
             "success": False,
             "error": friendly_error
-        }), 409
+        }
 
 def create_operation_prompt(operation_type: str, df_meta: DataFrameMetadata, df2_meta: Optional[DataFrameMetadata] = None, conversation_history: Optional[List[Dict[str, Any]]] = None) -> PromptTemplate:
     """Create operation-specific prompt template"""
     
     parser = PydanticOutputParser(pydantic_object=FunctionCall)
     format_instructions = parser.get_format_instructions()
+
+    # Common instruction block (applies to ALL operations):
+    # Users often send follow-ups that correct/adjust a previous request.
+    # The model must treat follow-ups as revisions and output the FINAL intended parameters.
+    followup_guidance = (
+        "IMPORTANT (follow-ups / corrections):\n"
+        "- The user may send a follow-up that corrects or updates a previous request.\n"
+        "- Phrases like 'sorry', 'actually', 'instead', 'I meant', 'it should be', 'change it to', 'oops', 'my bad' indicate a CORRECTION.\n"
+        "- Treat such a follow-up as a REVISION of intent and produce the FINAL parameters that reflect what the user wants NOW.\n"
+        "- If prior parameters are shown in the conversation context and they conflict with the latest request, the latest request wins.\n"
+        "- Do NOT copy conversational correction phrases (sorry, actually, etc.) into parameter values.\n"
+        "- Do not revert or undo previous changes unless explicitly asked - apply the correction to the original intent.\n\n"
+    )
     
     # Define base variables that are common to all operations
     all_variables = [
@@ -813,6 +853,8 @@ def create_operation_prompt(operation_type: str, df_meta: DataFrameMetadata, df2
             "table2_categorical_columns"
         ])
         template = """You are a data processing assistant. Create merge operations based on the available tables.
+
+{followup_guidance}
 
 First Table columns and their types:
 {column_info}
@@ -879,6 +921,23 @@ Note:
 
     elif operation_type == "replace_rename_reorder":
         template = """You are a data processing assistant. Create operations to modify the DataFrame structure and values.
+
+{followup_guidance}
+
+Additional rules for value replacements:
+- Avoid no-op replacements: NEVER output a replacement where oldValue == newValue.
+- If the user corrects a previous replacement, update the replacement(s) to match the latest user instruction.
+
+CRITICAL RULES FOR CORRECTIONS (follow-up requests):
+- When the user says "sorry", "actually", "instead", "I meant", "it should be", "change it to", etc., they are CORRECTING the previous request.
+- Conversational correction phrases like "sorry", "actually", "instead", "oops", "my bad" are NOT values to replace in the data.
+- When correcting a previous replacement:
+  * Keep the same oldValue from the previous request
+  * Update ONLY the newValue to what the user now wants
+  * DO NOT create replacements using correction phrases as oldValue (e.g., {{"oldValue": "sorry", ...}})
+  * DO NOT revert the previous change (e.g., swapping newValue back to oldValue)
+- Review the conversation context carefully to understand what the user is correcting.
+- Extract the actual data values from the user's request, ignoring conversational filler words.
 
 Available columns and their types:
 {column_info}
@@ -956,10 +1015,13 @@ Note:
   * Numeric columns: {numeric_columns}
   * Text columns: {categorical_columns}
   * Match data types when replacing values
+    * For text replacements, ignore conversational filler terms in the user's message; only use values that plausibly exist in the data.
 """
 
     elif operation_type == "sort_filter":
         template = """You are a data processing assistant. Create filter and sort operations based on the available columns.
+
+{followup_guidance}
 
 Available columns and their types:
 {column_info}
@@ -1024,6 +1086,8 @@ Note:
     elif operation_type == "group_pivot":
         template = """You are a data processing assistant. Create grouping and pivot operations based on the available columns.
 
+{followup_guidance}
+
 Available columns and their types:
 {column_info}
 
@@ -1073,6 +1137,8 @@ Note:
 
     elif operation_type == "add_column":
         template = """You are a data processing assistant. Create a new column based on the available columns.
+
+{followup_guidance}
 
 Available columns and their types:
 {column_info}
@@ -1196,6 +1262,8 @@ Note:
 
     elif operation_type == "reconcile":
         template = """You are a data processing assistant. Create reconciliation operations for comparing and matching data between two tables.
+
+{followup_guidance}
 
 First Table columns and their types:
 {column_info}
@@ -1353,6 +1421,8 @@ Example response:
     elif operation_type == "format":
         template = """You are a data formatting assistant. Create formatting operations for a DataFrame to make it visually appealing.
 
+{followup_guidance}
+
 Available columns and their types:
 {column_info}
 
@@ -1449,6 +1519,8 @@ Note:
     elif operation_type == "regex":
         template = """You are a regex pattern generation assistant. Create regex patterns based on natural language descriptions.
 
+{followup_guidance}
+
 User request: {user_input}
 
 {format_instructions}
@@ -1483,7 +1555,10 @@ Note:
     return PromptTemplate(
         template=template,
         input_variables=all_variables,
-        partial_variables={"format_instructions": format_instructions}
+        partial_variables={
+            "format_instructions": format_instructions,
+            "followup_guidance": followup_guidance,
+        }
     )
 
 def create_chain(operation_type: str, prompt: PromptTemplate):

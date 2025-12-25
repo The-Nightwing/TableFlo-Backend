@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from flask import Blueprint, request, jsonify
 from models import DataFrame, UserProcess, DataFrameOperation, OperationType, db, FormattingStep, AIRequest, User
 from llm_chain import run_chain, get_openai_api_key
+from llm_chain import PROMPT_INCOMPLETE_MESSAGE
 from pydantic import BaseModel, Field
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import PydanticOutputParser
@@ -20,6 +21,30 @@ from io import BytesIO
 import copy
 
 COLUMN_NOT_FOUND_MESSAGE = "The specified column name(s) could not be found."
+
+
+def _build_column_lookup(columns: set):
+    """Create a case-insensitive lookup for column names.
+
+    Returns a dict mapping lower(column) -> original column.
+    """
+    lookup = {}
+    for c in columns or set():
+        if isinstance(c, str):
+            lookup[c.lower()] = c
+    return lookup
+
+
+def _check_column_ci(column_name: str, available_lookup: dict, missing: set):
+    """Case-insensitive column check.
+
+    We treat column names as case-insensitive because users often type them differently
+    than the source schema, and LLMs may change casing.
+    """
+    if not column_name or not isinstance(column_name, str):
+        return
+    if column_name.lower() not in available_lookup:
+        missing.add(column_name)
 
 nlp_bp = Blueprint('nlp', __name__, url_prefix='/api/nlp')
 
@@ -204,11 +229,47 @@ def deep_merge_parameters(base: dict, updates: dict) -> dict:
     for key, value in updates.items():
         if value is None:
             continue
+        # Lists should not be deep-merged. Most operation payloads contain lists where
+        # positional/semantic merging is ambiguous (e.g., operations[], replacements[],
+        # sort_config[], filter_config[]). When the user submits a follow-up correction,
+        # the LLM often outputs a partial/updated list. Deep-merging lists causes
+        # "pollution" from previous outputs (like treating filler words as values).
+        #
+        # So: if the new value is a list, treat it as authoritative and overwrite.
+        if isinstance(value, list):
+            merged[key] = copy.deepcopy(value)
+            continue
+
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = deep_merge_parameters(merged.get(key), value)
         else:
             merged[key] = value
     return merged
+
+
+def is_followup_revision(original_request_id: str, previous_query: str, current_query: str) -> bool:
+    """Decide whether to treat this request as a follow-up revision.
+
+    Design goal: do NOT hardcode linguistic markers. If the client supplies an
+    `aiRequestId`, they are explicitly chaining this request to a previous one.
+    In that case, parameter *merging* is risky for most operations (payloads contain
+    lists where semantic alignment is ambiguous), so we treat the new query as a
+    revision and re-derive parameters based on conversation context.
+
+    This keeps the behavior generic and lets the model interpret the correction.
+    """
+    if not original_request_id:
+        return False
+    if not previous_query or not current_query:
+        return False
+
+    prev = previous_query.strip()
+    curr = current_query.strip()
+    if not prev or not curr:
+        return False
+
+    # If the text changed, assume it's a revision. If it didn't change, it's a retry.
+    return prev != curr
 
 
 def merge_with_previous_parameters(current_operation: str, result: dict, previous_operation: str, previous_parameters: dict) -> dict:
@@ -239,26 +300,43 @@ def find_missing_columns_for_add_column(params: dict, available_columns: set):
         return set()
 
     available_set = available_columns or set()
+    available_lookup = _build_column_lookup(available_set)
     missing = set()
 
     op_type = params.get("operationType")
     source_column = params.get("sourceColumn")
-    _check_column(source_column, available_set, missing)
+    _check_column_ci(source_column, available_lookup, missing)
 
     if op_type == "calculate":
         for step in params.get("operations", []) or []:
-            _check_column(step.get("column1"), available_set, missing)
+            # calculate schema: each step references column1 and (column2 | fixed_value)
+            _check_column_ci(step.get("column1"), available_lookup, missing)
             col2 = step.get("column2")
             if isinstance(col2, str):
-                _check_column(col2, available_set, missing)
+                _check_column_ci(col2, available_lookup, missing)
     elif op_type == "concatenate":
+        # NOTE: The LLM may output either:
+        # 1) the intended concatenate schema (list of ConcatStep objects)
+        # 2) a calculate-style schema (column1/column2/operator) even when the user asks to concatenate.
+        # We validate both so missing columns are always surfaced.
         for step in params.get("operations", []) or []:
-            if step.get("type") == "Full text":
+            if not isinstance(step, dict):
                 continue
-            _check_column(step.get("column"), available_set, missing)
+
+            # Case 1: proper concatenate step
+            if "column" in step:
+                _check_column_ci(step.get("column"), available_lookup, missing)
+                continue
+
+            # Case 2: calculate-like step
+            if "column1" in step:
+                _check_column_ci(step.get("column1"), available_lookup, missing)
+            col2 = step.get("column2")
+            if isinstance(col2, str):
+                _check_column_ci(col2, available_lookup, missing)
     elif op_type == "conditional":
         for condition in params.get("conditions", []) or []:
-            _check_column(condition.get("column"), available_set, missing)
+            _check_column_ci(condition.get("column"), available_lookup, missing)
 
     return missing
 
@@ -394,6 +472,26 @@ def validate_operation_columns_or_abort(operation_type: str, params: dict, metad
         return jsonify({"error": COLUMN_NOT_FOUND_MESSAGE}), 409
     return None
 
+
+def validate_chain_result_or_abort(result: dict):
+    """Normalize run_chain failures into API-friendly responses.
+
+    Returns None when ok, otherwise a (json, status).
+    """
+    if not isinstance(result, dict):
+        return (jsonify({"error": "Error processing request"}), 500)
+    if result.get("success") is True:
+        return None
+
+    # Standardize incomplete prompt
+    err = result.get("error")
+    if err == PROMPT_INCOMPLETE_MESSAGE:
+        return (jsonify({"error": PROMPT_INCOMPLETE_MESSAGE}), 409)
+
+    # Default: treat as prompt/LLM failure
+    status = 400
+    return (jsonify({"error": err or "Error processing request"}), status)
+
 @nlp_bp.route("/process", methods=["POST"])
 def process_natural_language():
     """Process natural language query with DataFrame context"""
@@ -404,6 +502,7 @@ def process_natural_language():
     previous_request_context = None
     previous_operation_type = None
     previous_request_parameters = None
+    is_followup = False
     
     try:
         print("[DEBUG] Starting process_natural_language endpoint")
@@ -558,6 +657,7 @@ def process_natural_language():
         validation_query = user_query
         if original_request_id and previous_request_query:
             validation_query = f"{previous_request_query}\nFollow-up: {user_query}"
+            is_followup = is_followup_revision(original_request_id, previous_request_query, user_query)
 
         # Validate required fields based on operation type
         if data.get("operation_type") in ["merge-files", "merge_files"]:
@@ -721,12 +821,16 @@ def process_natural_language():
                     table2_metadata=transformed_metadata2,
                     conversation_history=conversation_history
                 )
-                result = merge_with_previous_parameters(
-                    operation_type,
-                    result,
-                    previous_operation_type,
-                    previous_request_parameters
-                )
+                chain_err = validate_chain_result_or_abort(result)
+                if chain_err:
+                    return chain_err
+                if not is_followup:
+                    result = merge_with_previous_parameters(
+                        operation_type,
+                        result,
+                        previous_operation_type,
+                        previous_request_parameters
+                    )
                 column_validation_error = validate_operation_columns_or_abort(
                     operation_type,
                     result.get("parameters"),
@@ -807,12 +911,16 @@ def process_natural_language():
                 table2_metadata=transformed_metadata2,
                 conversation_history=conversation_history
             )
-            result = merge_with_previous_parameters(
-                data["operation_type"],
-                result,
-                previous_operation_type,
-                previous_request_parameters
-            )
+            chain_err = validate_chain_result_or_abort(result)
+            if chain_err:
+                return chain_err
+            if not is_followup:
+                result = merge_with_previous_parameters(
+                    data["operation_type"],
+                    result,
+                    previous_operation_type,
+                    previous_request_parameters
+                )
             column_validation_error = validate_operation_columns_or_abort(
                 data["operation_type"],
                 result.get("parameters"),
@@ -1158,12 +1266,16 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
-                    result = merge_with_previous_parameters(
-                        data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
-                    )
+                    chain_err = validate_chain_result_or_abort(result)
+                    if chain_err:
+                        return chain_err
+                    if not is_followup:
+                        result = merge_with_previous_parameters(
+                            data["operation_type"],
+                            result,
+                            previous_operation_type,
+                            previous_request_parameters
+                        )
                     column_validation_error = validate_operation_columns_or_abort(
                         data["operation_type"],
                         result.get("parameters"),
@@ -1354,12 +1466,12 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
-                    result = merge_with_previous_parameters(
-                        data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
-                    )
+                    # NOTE: For replace/rename/reorder, follow-up messages are commonly corrections
+                    # (e.g., "actually" / "instead" / "sorry, it should be..."). Deep-merging
+                    # list-heavy parameters (operations/replacements) across attempts leads to
+                    # invalid combined outputs (e.g., replacing "sorry" -> "england").
+                    # We rely on conversation_history + the prompt instructions to produce the
+                    # *final* operations instead of attempting to merge.
                     column_validation_error = validate_operation_columns_or_abort(
                         data["operation_type"],
                         result.get("parameters"),
@@ -1390,7 +1502,21 @@ def process_natural_language():
                 elif not result["parameters"].get("output_table_name"):
                     result["parameters"]["output_table_name"] = f"{data['tableName']}_filtered"
 
-                operation_message = f"Sort/filter on table '{data['tableName'] or ''}' to output '{result['parameters'].get('output_table_name', '')}'"
+                # Generate message based on operation types (same format as non-AI path)
+                message_parts = []
+                sort_config = result["parameters"].get("sort_config", [])
+                filter_config = result["parameters"].get("filter_config", [])
+                table_name = data['tableName']
+                
+                if sort_config:
+                    sort_columns = [f"'{config['column']}'" for config in sort_config]
+                    message_parts.append(f"Sort table '{table_name}' on column(s) {', '.join(sort_columns)}")
+                if filter_config:
+                    filter_columns = [f"'{config['column']}'" for config in filter_config]
+                    message_parts.append(f"Filter table '{table_name}' on column(s) {', '.join(filter_columns)}")
+                
+                operation_message = " and ".join(message_parts) if message_parts else f"Sort/filter on table '{table_name}'"
+                
                 df_operation = DataFrameOperation(
                     process_id=data["process_id"],
                     dataframe_id=dataframe.id,
@@ -1548,12 +1674,13 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
-                    result = merge_with_previous_parameters(
-                        data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
-                    )
+                    if not is_followup:
+                        result = merge_with_previous_parameters(
+                            data["operation_type"],
+                            result,
+                            previous_operation_type,
+                            previous_request_parameters
+                        )
                     column_validation_error = validate_operation_columns_or_abort(
                         data["operation_type"],
                         result.get("parameters"),
@@ -1752,12 +1879,13 @@ def process_natural_language():
                             dataframe_metadata=transformed_metadata1,
                             table2_metadata=transformed_metadata2
                         )
-                        result = merge_with_previous_parameters(
-                            data["operation_type"],
-                            result,
-                            previous_operation_type,
-                            previous_request_parameters
-                        )
+                        if not is_followup:
+                            result = merge_with_previous_parameters(
+                                data["operation_type"],
+                                result,
+                                previous_operation_type,
+                                previous_request_parameters
+                            )
                         column_validation_error = validate_operation_columns_or_abort(
                             data["operation_type"],
                             result.get("parameters"),
@@ -1957,12 +2085,13 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
-                    result = merge_with_previous_parameters(
-                        data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
-                    )
+                    if not is_followup:
+                        result = merge_with_previous_parameters(
+                            data["operation_type"],
+                            result,
+                            previous_operation_type,
+                            previous_request_parameters
+                        )
                     column_validation_error = validate_operation_columns_or_abort(
                         data["operation_type"],
                         result.get("parameters"),
@@ -2148,12 +2277,13 @@ def process_natural_language():
                         table2_metadata=None,
                         conversation_history=conversation_history
                     )
-                    result = merge_with_previous_parameters(
-                        data["operation_type"],
-                        result,
-                        previous_operation_type,
-                        previous_request_parameters
-                    )
+                    if not is_followup:
+                        result = merge_with_previous_parameters(
+                            data["operation_type"],
+                            result,
+                            previous_operation_type,
+                            previous_request_parameters
+                        )
                     column_validation_error = validate_operation_columns_or_abort(
                         data["operation_type"],
                         result.get("parameters"),
