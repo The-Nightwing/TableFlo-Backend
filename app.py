@@ -1517,6 +1517,16 @@ def process_natural_language():
                 
                 operation_message = " and ".join(message_parts) if message_parts else f"Sort/filter on table '{table_name}'"
                 
+                # Determine title based on what operations are being performed
+                if sort_config and filter_config:
+                    operation_title = "Sort and Filter"
+                elif sort_config:
+                    operation_title = "Sort"
+                elif filter_config:
+                    operation_title = "Filter"
+                else:
+                    operation_title = "Sort/Filter"
+                
                 df_operation = DataFrameOperation(
                     process_id=data["process_id"],
                     dataframe_id=dataframe.id,
@@ -1524,7 +1534,7 @@ def process_natural_language():
                     operation_subtype="sort_filter",
                     payload=result["parameters"],
                     message=operation_message,
-                    title="Sort/Filter"
+                    title=operation_title
                 )
                 db.session.add(df_operation)
                 db.session.commit()
