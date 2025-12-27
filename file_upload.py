@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, send_file
+from flask import Blueprint, make_response, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 import pandas as pd
 from firebase_config import get_storage_bucket
@@ -684,12 +684,19 @@ def get_process_blob(processId, filePath):
         mimetype = "text/csv" if file_type == "csv" else \
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-        return send_file(
-            BytesIO(data),
-            as_attachment=True,
-            download_name=f"{filePath}.{file_type}",
-            mimetype=mimetype
+        response = make_response(
+            send_file(
+                BytesIO(data),
+                mimetype=mimetype,
+                as_attachment=True,
+                download_name=f"{filePath}.{file_type}"
+            )
         )
+
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="{filePath}.{file_type}"'
+        )
+        return response
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
