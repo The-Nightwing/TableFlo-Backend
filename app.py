@@ -9,6 +9,7 @@ from langchain.prompts import PromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from langchain_community.chat_models import ChatOpenAI
 import json
+import re
 from datetime import datetime, timezone
 from add_column import process_add_column
 from sort_filter import process_sort_filter_data
@@ -1713,7 +1714,7 @@ def process_natural_language():
                 elif not result["parameters"].get("outputTableName"):
                     result["parameters"]["outputTableName"] = f"{data['tableName']}_pivot"
 
-                operation_message = f"Group/pivot on table '{result['parameters'].get('tableName', '')}' to output '{output_table_name}'"
+                operation_message = f"Create a pivot table from table '{result['parameters'].get('tableName', '')}' using specified column headers and rows, columns and values"
                 df_operation = DataFrameOperation(
                     process_id=data["process_id"],
                     dataframe_id=dataframe.id,
