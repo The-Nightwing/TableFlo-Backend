@@ -150,12 +150,20 @@ def apply_pattern(df, source_column, pattern):
     Extract pattern from source column using regex
     """
     try:
-        # Get all matches but only use the first column
         re.compile(pattern)
 
-        # Extract matches
-        matches = df[source_column].astype(str).str.extract(pattern, expand=True)
-        return matches.iloc[:, 0]  # Return only the first column of matches
+        # Check if we should extract all matches or just the first one
+        # If pattern is a simple character class like ([A-H]+), we want all occurrences
+        # Use findall to get all matches and join them
+        def extract_all_matches(text):
+            matches = re.findall(pattern, str(text))
+            if matches:
+                # Join all matches together
+                return ''.join(matches)
+            return None
+        
+        # Apply the extraction function to each row
+        return df[source_column].apply(extract_all_matches)
     except Exception as e:
         raise ValueError(f"Invalid regex pattern: {str(e)}")
 

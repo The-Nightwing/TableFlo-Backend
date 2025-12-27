@@ -1158,26 +1158,21 @@ Generate a structured add_column operation that specifies one of these formats:
 1. Pattern Operation:
    - Use for extracting patterns from text using regular expressions
    - Required fields: tableName, newColumnName, operationType="pattern", sourceColumn, pattern
-   - CRITICAL: The pattern is a regex that will be used with pandas str.extract()
+   - CRITICAL: The pattern uses re.findall() to extract ALL matching occurrences and joins them
    - Understanding quantifiers:
-     * NO quantifier (e.g., "[A-H]") = matches only ONE character
-     * Use "+" for one or more (e.g., "[A-H]+") = matches multiple consecutive characters
-     * Use "*" for zero or more (e.g., "[A-H]*") = matches zero or multiple characters
-     * Use "{{n}}" for exactly n characters (e.g., "[A-H]{{5}}")
-   - IMPORTANT: The examples below are ONLY for illustration. Always use the EXACT character range/pattern the user specifies in their query:
-     * If user says "A-H", use "[A-H]+" NOT "[A-Z]+"
-     * If user says "A-Z", use "[A-Z]+" NOT "[A-H]+"
-     * If user says "digits", use "\\d+" NOT "[A-H]+"
-   - Pattern structure examples (adapt to user's specific request):
-     * Extract ALL consecutive uppercase letters in range A-H: "([A-H]+)"
-     * Extract ALL consecutive digits: "(\\d+)"
-     * Extract ALL consecutive letters: "([A-Za-z]+)"
-     * Extract first 3 uppercase letters: "([A-Z]{{3}})"
-     * Extract email domain: "@([\\w.-]+)"
-   - Keywords to identify quantifier needs:
-     * "all characters" → use "+" quantifier
-     * "extract letters/digits/characters" → use "+" quantifier
-     * "first N characters" or "exactly N" → use "{{N}}" quantifier
+     * NO quantifier = matches each individual character separately
+     * "+" = matches consecutive characters as groups
+   - Pattern construction rules:
+     * For character ranges: Use bracket notation [START-END] where START and END are the exact letters user specified
+     * For all individual characters: Use the range without "+" 
+     * For consecutive groups: Add "+" after the range
+     * Always wrap in parentheses for capture group
+   - Examples (REPLACE ranges with user's actual input):
+     * User: "all characters from X to Y" → Pattern: "([X-Y])"
+     * User: "consecutive letters X to Y" → Pattern: "([X-Y]+)"
+     * User: "all digits" → Pattern: "(\\d)"
+     * User: "consecutive digits" → Pattern: "(\\d+)"
+     * User: "email domain" → Pattern: "@([\\w.-]+)"
      * "optional" → use "*" or "?" quantifier
 
 2. Calculation Operation:
