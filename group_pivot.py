@@ -562,7 +562,7 @@ def generate_pivot():
             if not result.get('success'):
                 df_operation.set_error(result.get('error'))
                 db.session.commit()
-                return jsonify({"error": result.get('error')}), 400
+                return jsonify({"error": result.get('error')}), 409
 
             # Update operation status to success
             df_operation.set_success()
